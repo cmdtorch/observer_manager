@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.database import Base
+from app.db.base import Base
 # Import all models to ensure they're registered with Base.metadata
 import app.models  # noqa: F401
 

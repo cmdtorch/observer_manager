@@ -3,8 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.auth import verify_credentials
-from app.database import get_db
+from app.core.security import verify_credentials
+from app.db.session import get_db
 from app.models.api_key import ApiKey
 from app.models.application import Application
 from app.models.invited_user import InvitedUser
@@ -21,13 +21,13 @@ from app.schemas.organization import (
     SetupTelegramRequest,
     SetupTelegramResponse,
 )
-from app.services.glitchtip_client import GlitchtipClient
-from app.services.grafana_client import GrafanaClient
+from app.services.clients.glitchtip_client import GlitchtipClient
+from app.services.clients.grafana_client import GrafanaClient
 from app.services.nginx_manager import NginxManager
 from app.services.organization_service import OrganizationService
 from app.services.key_generator import mask_api_key
-from app.dependencies import get_grafana_client, get_glitchtip_client, get_nginx_manager
-from app.config import get_settings
+from app.api.deps import get_grafana_client, get_glitchtip_client, get_nginx_manager
+from app.core.config import get_settings
 
 router = APIRouter()
 

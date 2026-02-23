@@ -3,7 +3,7 @@ import time
 import httpx
 import structlog
 
-from app.config import Settings
+from app.core.config import Settings
 
 logger = structlog.get_logger()
 

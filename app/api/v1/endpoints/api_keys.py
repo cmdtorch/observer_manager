@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import verify_credentials
-from app.database import get_db
-from app.dependencies import get_nginx_manager
+from app.core.security import verify_credentials
+from app.db.session import get_db
+from app.api.deps import get_nginx_manager
 from app.models.api_key import ApiKey
 from app.models.organization import Organization
 from app.schemas.api_key import (

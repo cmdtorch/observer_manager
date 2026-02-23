@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import verify_credentials
-from app.config import get_settings
-from app.database import get_db
-from app.dependencies import get_glitchtip_client
+from app.core.security import verify_credentials
+from app.core.config import get_settings
+from app.db.session import get_db
+from app.api.deps import get_glitchtip_client
 from app.models.application import Application
 from app.models.invited_user import InvitedUser
 from app.models.organization import Organization
@@ -17,9 +17,9 @@ from app.schemas.application import (
     InviteUsersRequest,
     InviteUsersResponse,
 )
-from app.services.glitchtip_client import GlitchtipClient
-from app.dependencies import get_grafana_client
-from app.services.grafana_client import GrafanaClient
+from app.services.clients.glitchtip_client import GlitchtipClient
+from app.api.deps import get_grafana_client
+from app.services.clients.grafana_client import GrafanaClient
 
 router = APIRouter()
 

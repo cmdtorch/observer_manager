@@ -7,10 +7,10 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.config import get_settings
-from app.routers import health, organizations, api_keys, applications
-from app.services.grafana_client import GrafanaClient
-from app.services.glitchtip_client import GlitchtipClient
+from app.core.config import get_settings
+from app.api.v1.router import api_router
+from app.services.clients.grafana_client import GrafanaClient
+from app.services.clients.glitchtip_client import GlitchtipClient
 from app.services.nginx_manager import NginxManager
 
 # Configure structlog
@@ -59,10 +59,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
     )
 
 
-app.include_router(health.router, prefix="/api")
-app.include_router(organizations.router, prefix="/api")
-app.include_router(api_keys.router, prefix="/api")
-app.include_router(applications.router, prefix="/api")
+app.include_router(api_router, prefix="/api")
 
 
 if __name__ == "__main__":

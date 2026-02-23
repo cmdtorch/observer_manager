@@ -7,14 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.config import Settings
+from app.core.config import Settings
 from app.models.api_key import ApiKey
 from app.models.application import Application
 from app.models.invited_user import InvitedUser
 from app.models.organization import Organization
 from app.schemas.organization import CreateOrganizationRequest, CreateOrganizationResponse, SetupTelegramResponse
-from app.services.glitchtip_client import GlitchtipClient
-from app.services.grafana_client import GrafanaClient
+from app.services.clients.glitchtip_client import GlitchtipClient
+from app.services.clients.grafana_client import GrafanaClient
 from app.services.key_generator import generate_api_key
 from app.services.nginx_manager import NginxManager
 
