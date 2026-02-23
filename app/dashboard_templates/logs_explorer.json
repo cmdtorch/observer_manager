@@ -1,0 +1,114 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {"list": []},
+  "description": "Log explorer with filtering by application and severity",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "loki", "uid": "loki"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "custom": {"fillOpacity": 80, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineWidth": 1}},
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {"calcs": [], "displayMode": "list", "placement": "bottom"},
+        "orientation": "auto",
+        "stacking": "none",
+        "tooltip": {"mode": "single", "sort": "none"},
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "loki"},
+          "expr": "sum by (level) (count_over_time({application=\"$application\", level=~\"$severity\"}[1m]))",
+          "legendFormat": "{{level}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Log Volume Over Time",
+      "type": "barchart"
+    },
+    {
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"h": 16, "w": 24, "x": 0, "y": 8},
+      "id": 2,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "loki"},
+          "expr": "{application=\"$application\", level=~\"$severity\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "title": "Logs",
+      "type": "logs"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["logs", "loki"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {"type": "prometheus", "uid": "mimir"},
+        "definition": "label_values(application)",
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "application",
+        "options": [],
+        "query": {"query": "label_values(application)", "refId": "StandardVariableQuery"},
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query",
+        "label": "Application"
+      },
+      {
+        "current": {"selected": true, "text": ["INFO", "WARN", "ERROR", "DEBUG"], "value": ["INFO", "WARN", "ERROR", "DEBUG"]},
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "severity",
+        "options": [
+          {"selected": true, "text": "INFO", "value": "INFO"},
+          {"selected": true, "text": "WARN", "value": "WARN"},
+          {"selected": true, "text": "ERROR", "value": "ERROR"},
+          {"selected": true, "text": "DEBUG", "value": "DEBUG"}
+        ],
+        "query": "INFO,WARN,ERROR,DEBUG",
+        "type": "custom",
+        "label": "Severity"
+      }
+    ]
+  },
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Logs Explorer",
+  "uid": "logs-explorer",
+  "version": 1
+}

@@ -1,0 +1,18 @@
+[project]
+name = "observer-manager"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.18.4",
+    "asyncpg>=0.31.0",
+    "docker>=7.1.0",
+    "fastapi>=0.131.0",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.13.1",
+    "python-slugify>=8.0.4",
+    "sqlalchemy[asyncio]>=2.0.46",
+    "structlog>=25.5.0",
+    "uvicorn[standard]>=0.41.0",
+]
