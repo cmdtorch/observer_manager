@@ -108,7 +108,7 @@ class GlitchtipClient:
         response = await self._request(
             "POST",
             f"/api/0/organizations/{org_slug}/members/",
-            json={"email": email, "role": role},
+            json={"email": email, "orgRole": role},
         )
         if response.status_code in (200, 201):
             data = response.json()
