@@ -11,6 +11,7 @@ dependencies = [
     "fastapi>=0.131.0",
     "httpx>=0.28.1",
     "pydantic-settings>=2.13.1",
+    "pydantic[email]>=2.12.5",
     "python-slugify>=8.0.4",
     "sqlalchemy[asyncio]>=2.0.46",
     "structlog>=25.5.0",

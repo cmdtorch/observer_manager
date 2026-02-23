@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, status
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -28,6 +29,7 @@ from app.services.organization_service import OrganizationService
 from app.services.key_generator import mask_api_key
 from app.api.deps import get_grafana_client, get_glitchtip_client, get_nginx_manager
 from app.core.config import get_settings
+from app.services.user_service import fetch_org_users
 
 router = APIRouter()
 
@@ -65,6 +67,8 @@ async def list_organizations(
 async def get_organization(
     org_id: int,
     db: AsyncSession = Depends(get_db),
+    grafana: GrafanaClient = Depends(get_grafana_client),
+    glitchtip: GlitchtipClient = Depends(get_glitchtip_client),
     _: str = Depends(verify_credentials),
 ):
     result = await db.execute(
@@ -78,8 +82,20 @@ async def get_organization(
     )
     org = result.scalar_one_or_none()
     if not org:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Organization not found")
+
+    try:
+        users = await fetch_org_users(org, grafana, glitchtip)
+    except httpx.HTTPStatusError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Grafana/GlitchTip API unavailable",
+        )
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Grafana/GlitchTip API unavailable",
+        )
 
     return OrganizationDetail(
         id=org.id,
@@ -123,6 +139,7 @@ async def get_organization(
             )
             for u in org.invited_users
         ],
+        users=users,
     )
 
 
@@ -142,7 +159,18 @@ async def setup_telegram(
 ):
     settings = get_settings()
     service = OrganizationService(db, grafana, glitchtip, nginx, settings)
-    return await service.setup_telegram(org_id, request.chat_id)
+    try:
+        return await service.setup_telegram(org_id, request.chat_id)
+    except httpx.HTTPStatusError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Grafana API unavailable",
+        )
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Grafana API unavailable",
+        )
 
 
 @router.delete("/organizations/{org_id}", response_model=DeleteOrganizationResponse)

@@ -287,7 +287,7 @@ class OrganizationService:
         if not org.grafana_org_id:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Organization has no Grafana org")
 
-        await self.grafana.create_telegram_contact_point(
+        await self.grafana.upsert_telegram_contact_point(
             org.grafana_org_id,
             self.settings.telegram_bot_token,
             chat_id,
@@ -299,7 +299,7 @@ class OrganizationService:
         return SetupTelegramResponse(
             org_id=org_id,
             chat_id=chat_id,
-            message="Telegram contact point created successfully",
+            message="Telegram contact point updated successfully",
         )
 
     async def delete_organization(self, org_id: int) -> dict:

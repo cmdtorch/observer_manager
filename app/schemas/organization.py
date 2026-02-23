@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, field_validator
 
+from app.schemas.user import UserDetail
+
 
 class CreateOrganizationRequest(BaseModel):
     name: str
@@ -91,6 +93,7 @@ class OrganizationDetail(BaseModel):
     api_keys: list[ApiKeyDetail]
     applications: list[ApplicationDetail]
     invited_users: list[InvitedUserDetail]
+    users: list[UserDetail]
 
     model_config = {"from_attributes": True}
 

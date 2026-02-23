@@ -122,3 +122,24 @@ class GlitchtipClient:
             body=response.text,
         )
         return False, None
+
+    async def list_members(self, org_slug: str) -> list[dict]:
+        """GET /api/0/organizations/{org_slug}/members/ â€” list members"""
+        response = await self._request(
+            "GET", f"/api/0/organizations/{org_slug}/members/"
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    async def delete_member(self, org_slug: str, member_id: str | int) -> bool:
+        """DELETE /api/0/organizations/{org_slug}/members/{member_id}/"""
+        response = await self._request(
+            "DELETE",
+            f"/api/0/organizations/{org_slug}/members/{member_id}/",
+        )
+        if response.status_code == 404:
+            return False
+        if response.status_code not in (200, 204):
+            response.raise_for_status()
+        return True

@@ -6,6 +6,7 @@ import structlog
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.api.v1.router import api_router
@@ -47,6 +48,15 @@ app = FastAPI(
     version="1.0.0",
     description="Centralized management API for self-hosted observability stack",
     lifespan=lifespan,
+)
+
+settings = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.parse_cors_list(settings.cors_allow_origins),
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=settings.parse_cors_list(settings.cors_allow_methods),
+    allow_headers=settings.parse_cors_list(settings.cors_allow_headers),
 )
 
 

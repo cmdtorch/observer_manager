@@ -528,3 +528,113 @@ class GrafanaClient:
         """POST /api/user/using/{org_id} — switch admin context to org"""
         response = await self._request("POST", f"/api/user/using/{org_id}")
         response.raise_for_status()
+
+    async def list_org_users(self, org_id: int) -> list[dict]:
+        """GET /api/org/users list users within org"""
+        response = await self._request(
+            "GET",
+            "/api/org/users",
+            extra_headers={"X-Grafana-Org-Id": str(org_id)},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    async def delete_org_user(self, org_id: int, user_id: int) -> bool:
+        """DELETE /api/orgs/{org_id}/users/{user_id} � remove user from org"""
+        response = await self._request(
+            "DELETE",
+            f"/api/orgs/{org_id}/users/{user_id}",
+        )
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        return True
+
+    async def upsert_telegram_contact_point(
+        self, org_id: int, bot_token: str, chat_id: str
+    ) -> None:
+        """Create or update Telegram contact point and ensure policy is set."""
+        sa_token, sa_id = await self._create_temp_service_account_token(org_id)
+        try:
+            base_url = f"{self.base_url}/api/v1/provisioning/contact-points"
+            headers = {
+                "Authorization": f"Bearer {sa_token}",
+                "Content-Type": "application/json",
+            }
+
+            # Wait for Alertmanager to be ready for this org before provisioning.
+            deadline = time.monotonic() + 90
+            while True:
+                probe = await self.client.get(base_url, headers=headers, timeout=10.0)
+                if probe.status_code == 200:
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Alertmanager not ready after 90s (last status: {probe.status_code})"
+                    )
+                await asyncio.sleep(15)
+
+            payload = {
+                "name": "Telegram",
+                "type": "telegram",
+                "settings": {"bottoken": bot_token, "chatid": chat_id},
+                "disableResolveMessage": False,
+            }
+
+            response = await self.client.get(
+                base_url, headers=headers, timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, dict):
+                items = data.get("items") or data.get("contactPoints") or []
+            elif isinstance(data, list):
+                items = data
+            else:
+                items = []
+
+            existing = next(
+                (
+                    item
+                    for item in items
+                    if str(item.get("name", "")).lower() == "telegram"
+                ),
+                None,
+            )
+
+            if existing and (existing.get("uid") or existing.get("id")):
+                uid = existing.get("uid") or existing.get("id")
+                update_url = f"{base_url}/{uid}"
+                update_response = await self.client.put(
+                    update_url, headers=headers, json=payload, timeout=10.0
+                )
+                if update_response.status_code == 404:
+                    create_response = await self.client.post(
+                        base_url, headers=headers, json=payload, timeout=10.0
+                    )
+                    create_response.raise_for_status()
+                else:
+                    update_response.raise_for_status()
+            else:
+                create_response = await self.client.post(
+                    base_url, headers=headers, json=payload, timeout=10.0
+                )
+                create_response.raise_for_status()
+
+            policies_url = f"{self.base_url}/api/v1/provisioning/policies"
+            policy_response = await self.client.put(
+                policies_url,
+                headers=headers,
+                json={
+                    "receiver": "Telegram",
+                    "group_by": ["grafana_folder", "alertname"],
+                },
+                timeout=10.0,
+            )
+            policy_response.raise_for_status()
+        finally:
+            try:
+                await self._delete_service_account(org_id, sa_id)
+            except Exception as exc:
+                logger.warning("grafana_delete_service_account_failed", error=str(exc))
