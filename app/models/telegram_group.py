@@ -1,25 +1,24 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
 
-class ApiKey(Base):
-    __tablename__ = "api_keys"
+class TelegramGroup(Base):
+    __tablename__ = "telegram_groups"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    organization_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    chat_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True
     )
-    key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -30,6 +29,6 @@ class ApiKey(Base):
         onupdate=func.now(),
     )
 
-    organization: Mapped["Organization"] = relationship(  # noqa: F821
-        "Organization", back_populates="api_keys"
+    org: Mapped["Organization | None"] = relationship(  # noqa: F821
+        "Organization", back_populates="telegram_groups"
     )

@@ -1,6 +1,6 @@
 from app.models.organization import Organization
-from app.services.clients.grafana_client import GrafanaClient
-from app.services.clients.glitchtip_client import GlitchtipClient
+from app.services.clients.grafana_client import GrafanaService
+from app.services.clients.glitchtip_client import GlitchTipService
 
 
 def _user_key(email: str | None, fallback: str) -> str:
@@ -11,13 +11,13 @@ def _user_key(email: str | None, fallback: str) -> str:
 
 async def fetch_org_users(
     org: Organization,
-    grafana: GrafanaClient,
-    glitchtip: GlitchtipClient,
+    grafana: GrafanaService,
+    glitchtip: GlitchTipService,
 ) -> list[dict]:
     users: dict[str, dict] = {}
 
     if org.grafana_org_id:
-        grafana_users = await grafana.list_org_users(org.grafana_org_id)
+        grafana_users = await grafana.get_org_users(org.grafana_org_id)
         for user in grafana_users:
             if user.get("isDisabled") is True:
                 continue
@@ -34,7 +34,7 @@ async def fetch_org_users(
             }
 
     if org.glitchtip_slug:
-        members = await glitchtip.list_members(org.glitchtip_slug)
+        members = await glitchtip.get_org_members(org.glitchtip_slug)
         for member in members:
             if member.get("pending") is True:
                 continue

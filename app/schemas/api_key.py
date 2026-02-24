@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -8,7 +9,7 @@ class CreateApiKeyRequest(BaseModel):
 
 
 class CreateApiKeyResponse(BaseModel):
-    id: int
+    id: uuid.UUID
     key: str
     description: str | None
     organization: str
@@ -16,7 +17,7 @@ class CreateApiKeyResponse(BaseModel):
 
 
 class ApiKeyListItem(BaseModel):
-    id: int
+    id: uuid.UUID
     key_masked: str
     description: str | None
     is_active: bool
@@ -25,4 +26,4 @@ class ApiKeyListItem(BaseModel):
 
 class DeleteApiKeyResponse(BaseModel):
     message: str
-    key_id: int
+    key_id: uuid.UUID

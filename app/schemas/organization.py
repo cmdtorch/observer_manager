@@ -1,14 +1,15 @@
+import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 
-from app.schemas.user import UserDetail
+from app.schemas.user import UserDetail, UserRead
 
 
 class CreateOrganizationRequest(BaseModel):
     name: str
     telegram_chat_id: str | None = None
-    emails: list[str] | None = None
+    users: list[str] | None = None  # list of emails
 
     @field_validator("name")
     @classmethod
@@ -27,12 +28,13 @@ class OtlpHeaders(BaseModel):
 
 
 class CreateOrganizationResponse(BaseModel):
-    id: int
+    id: uuid.UUID
     name: str
     slug: str
     scope_org_id: str
     grafana_org_id: int | None
     grafana_url: str
+    glitchtip_org_id: int | None
     glitchtip_slug: str | None
     glitchtip_url: str
     api_key: str
@@ -43,10 +45,11 @@ class CreateOrganizationResponse(BaseModel):
 
 
 class OrganizationListItem(BaseModel):
-    id: int
+    id: uuid.UUID
     name: str
     slug: str
     grafana_org_id: int | None
+    glitchtip_org_id: int | None
     glitchtip_slug: str | None
     is_active: bool
     created_at: datetime
@@ -55,7 +58,7 @@ class OrganizationListItem(BaseModel):
 
 
 class ApiKeyDetail(BaseModel):
-    id: int
+    id: uuid.UUID
     key_masked: str
     description: str | None
     is_active: bool
@@ -63,44 +66,34 @@ class ApiKeyDetail(BaseModel):
 
 
 class ApplicationDetail(BaseModel):
-    id: int
+    id: uuid.UUID
     name: str
     platform: str | None
     glitchtip_dsn: str | None
     created_at: datetime
 
 
-class InvitedUserDetail(BaseModel):
-    id: int
-    email: str
-    grafana_invited: bool
-    grafana_invite_link: str | None
-    glitchtip_invited: bool
-    glitchtip_invite_link: str | None
-    created_at: datetime
-
-
 class OrganizationDetail(BaseModel):
-    id: int
+    id: uuid.UUID
     name: str
     slug: str
     grafana_org_id: int | None
+    glitchtip_org_id: int | None
     glitchtip_slug: str | None
-    telegram_chat_id: str | None
+    telegram_chat: str | None
     is_active: bool
     created_at: datetime
     updated_at: datetime
     api_keys: list[ApiKeyDetail]
     applications: list[ApplicationDetail]
-    invited_users: list[InvitedUserDetail]
-    users: list[UserDetail]
+    users: list[UserRead]
 
     model_config = {"from_attributes": True}
 
 
 class DeleteOrganizationResponse(BaseModel):
     message: str
-    organization_id: int
+    organization_id: uuid.UUID
     name: str
 
 
@@ -109,6 +102,17 @@ class SetupTelegramRequest(BaseModel):
 
 
 class SetupTelegramResponse(BaseModel):
-    org_id: int
+    org_id: uuid.UUID
     chat_id: str
+    message: str
+
+
+class SyncOrganizationResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    grafana_org_id: int | None
+    glitchtip_org_id: int | None
+    glitchtip_slug: str | None
+    users_synced: int
     message: str

@@ -1,8 +1,9 @@
+import uuid
 from datetime import datetime
 
 from pydantic import BaseModel
 
-VALID_PLATFORMS = {"python", "nodejs", "react-native", "nextjs", "other"}
+VALID_PLATFORMS = {"django", "reactjs", "react_native", "fastapi", "nodejs", "nextjs", "other"}
 
 
 class CreateApplicationRequest(BaseModel):
@@ -11,7 +12,7 @@ class CreateApplicationRequest(BaseModel):
 
 
 class CreateApplicationResponse(BaseModel):
-    id: int
+    id: uuid.UUID
     name: str
     platform: str | None
     glitchtip_dsn: str | None
@@ -21,7 +22,7 @@ class CreateApplicationResponse(BaseModel):
 
 
 class ApplicationListItem(BaseModel):
-    id: int
+    id: uuid.UUID
     name: str
     platform: str | None
     glitchtip_dsn: str | None
@@ -32,7 +33,7 @@ class ApplicationListItem(BaseModel):
 
 class DeleteApplicationResponse(BaseModel):
     message: str
-    app_id: int
+    app_id: uuid.UUID
 
 
 class InviteUsersRequest(BaseModel):

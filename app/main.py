@@ -10,8 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.api.v1.router import api_router
-from app.services.clients.grafana_client import GrafanaClient
-from app.services.clients.glitchtip_client import GlitchtipClient
+from app.services.clients.grafana_client import GrafanaService
+from app.services.clients.glitchtip_client import GlitchTipService
 from app.services.nginx_manager import NginxManager
 
 # Configure structlog
@@ -32,8 +32,8 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     http_client = httpx.AsyncClient()
 
-    app.state.grafana_client = GrafanaClient(settings, http_client)
-    app.state.glitchtip_client = GlitchtipClient(settings, http_client)
+    app.state.grafana_client = GrafanaService(settings, http_client)
+    app.state.glitchtip_client = GlitchTipService(settings, http_client)
     app.state.nginx_manager = NginxManager(settings)
 
     logger.info("observer_manager_started")

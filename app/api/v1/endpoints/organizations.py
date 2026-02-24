@@ -1,14 +1,16 @@
+import uuid
+
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.deps import get_glitchtip_client, get_grafana_client, get_nginx_manager
+from app.core.config import get_settings
 from app.core.security import verify_credentials
 from app.db.session import get_db
 from app.models.api_key import ApiKey
-from app.models.application import Application
-from app.models.invited_user import InvitedUser
 from app.models.organization import Organization
 from app.schemas.organization import (
     ApiKeyDetail,
@@ -16,19 +18,18 @@ from app.schemas.organization import (
     CreateOrganizationRequest,
     CreateOrganizationResponse,
     DeleteOrganizationResponse,
-    InvitedUserDetail,
     OrganizationDetail,
     OrganizationListItem,
     SetupTelegramRequest,
     SetupTelegramResponse,
+    SyncOrganizationResponse,
 )
-from app.services.clients.glitchtip_client import GlitchtipClient
-from app.services.clients.grafana_client import GrafanaClient
+from app.schemas.user import UserRead
+from app.services.clients.glitchtip_client import GlitchTipService
+from app.services.clients.grafana_client import GrafanaService
 from app.services.nginx_manager import NginxManager
-from app.services.organization_service import OrganizationService
 from app.services.key_generator import mask_api_key
-from app.api.deps import get_grafana_client, get_glitchtip_client, get_nginx_manager
-from app.core.config import get_settings
+from app.services.organization_service import OrganizationService
 from app.services.user_service import fetch_org_users
 
 router = APIRouter()
@@ -42,8 +43,8 @@ router = APIRouter()
 async def create_organization(
     request: CreateOrganizationRequest,
     db: AsyncSession = Depends(get_db),
-    grafana: GrafanaClient = Depends(get_grafana_client),
-    glitchtip: GlitchtipClient = Depends(get_glitchtip_client),
+    grafana: GrafanaService = Depends(get_grafana_client),
+    glitchtip: GlitchTipService = Depends(get_glitchtip_client),
     nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
@@ -58,17 +59,18 @@ async def list_organizations(
     _: str = Depends(verify_credentials),
 ):
     result = await db.execute(
-        select(Organization).where(Organization.is_active == True).order_by(Organization.id)  # noqa: E712
+        select(Organization).where(Organization.is_active == True).order_by(Organization.created_at)  # noqa: E712
     )
     return result.scalars().all()
 
 
 @router.get("/organizations/{org_id}", response_model=OrganizationDetail)
 async def get_organization(
-    org_id: int,
+    org_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    grafana: GrafanaClient = Depends(get_grafana_client),
-    glitchtip: GlitchtipClient = Depends(get_glitchtip_client),
+    grafana: GrafanaService = Depends(get_grafana_client),
+    glitchtip: GlitchTipService = Depends(get_glitchtip_client),
     _: str = Depends(verify_credentials),
 ):
     result = await db.execute(
@@ -77,33 +79,30 @@ async def get_organization(
         .options(
             selectinload(Organization.api_keys),
             selectinload(Organization.applications),
-            selectinload(Organization.invited_users),
+            selectinload(Organization.users),
         )
     )
     org = result.scalar_one_or_none()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
-    try:
-        users = await fetch_org_users(org, grafana, glitchtip)
-    except httpx.HTTPStatusError:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Grafana/GlitchTip API unavailable",
-        )
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Grafana/GlitchTip API unavailable",
-        )
+    # Return DB data immediately; trigger background sync
+    async def _sync_in_bg():
+        try:
+            await fetch_org_users(org, grafana, glitchtip)
+        except Exception:
+            pass
+
+    background_tasks.add_task(_sync_in_bg)
 
     return OrganizationDetail(
         id=org.id,
         name=org.name,
         slug=org.slug,
         grafana_org_id=org.grafana_org_id,
+        glitchtip_org_id=org.glitchtip_org_id,
         glitchtip_slug=org.glitchtip_slug,
-        telegram_chat_id=org.telegram_chat_id,
+        telegram_chat=org.telegram_chat,
         is_active=org.is_active,
         created_at=org.created_at,
         updated_at=org.updated_at,
@@ -127,20 +126,31 @@ async def get_organization(
             )
             for a in org.applications
         ],
-        invited_users=[
-            InvitedUserDetail(
-                id=u.id,
-                email=u.email,
-                grafana_invited=u.grafana_invited,
-                grafana_invite_link=u.grafana_invite_link,
-                glitchtip_invited=u.glitchtip_invited,
-                glitchtip_invite_link=u.glitchtip_invite_link,
-                created_at=u.created_at,
-            )
-            for u in org.invited_users
-        ],
-        users=users,
+        users=[UserRead.from_user(u) for u in org.users],
     )
+
+
+@router.post(
+    "/organizations/{org_id}/sync",
+    response_model=SyncOrganizationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def sync_organization(
+    org_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    grafana: GrafanaService = Depends(get_grafana_client),
+    glitchtip: GlitchTipService = Depends(get_glitchtip_client),
+    nginx: NginxManager = Depends(get_nginx_manager),
+    _: str = Depends(verify_credentials),
+):
+    settings = get_settings()
+    service = OrganizationService(db, grafana, glitchtip, nginx, settings)
+    try:
+        return await service.sync_organization(org_id)
+    except httpx.HTTPStatusError:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="External API unavailable")
+    except httpx.RequestError:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="External API unavailable")
 
 
 @router.post(
@@ -149,11 +159,11 @@ async def get_organization(
     status_code=status.HTTP_200_OK,
 )
 async def setup_telegram(
-    org_id: int,
+    org_id: uuid.UUID,
     request: SetupTelegramRequest,
     db: AsyncSession = Depends(get_db),
-    grafana: GrafanaClient = Depends(get_grafana_client),
-    glitchtip: GlitchtipClient = Depends(get_glitchtip_client),
+    grafana: GrafanaService = Depends(get_grafana_client),
+    glitchtip: GlitchTipService = Depends(get_glitchtip_client),
     nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
@@ -162,23 +172,17 @@ async def setup_telegram(
     try:
         return await service.setup_telegram(org_id, request.chat_id)
     except httpx.HTTPStatusError:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Grafana API unavailable",
-        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Grafana API unavailable")
     except httpx.RequestError:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Grafana API unavailable",
-        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Grafana API unavailable")
 
 
 @router.delete("/organizations/{org_id}", response_model=DeleteOrganizationResponse)
 async def delete_organization(
-    org_id: int,
+    org_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    grafana: GrafanaClient = Depends(get_grafana_client),
-    glitchtip: GlitchtipClient = Depends(get_glitchtip_client),
+    grafana: GrafanaService = Depends(get_grafana_client),
+    glitchtip: GlitchTipService = Depends(get_glitchtip_client),
     nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
@@ -188,20 +192,23 @@ async def delete_organization(
     return DeleteOrganizationResponse(**result)
 
 
-# create alerts create_default_alert_rules for organization
 @router.post("/organizations/{org_id}/alerts/create-default", status_code=status.HTTP_200_OK)
 async def create_default_alerts(
-    org_id: int,
+    org_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    grafana: GrafanaClient = Depends(get_grafana_client),
-    glitchtip: GlitchtipClient = Depends(get_glitchtip_client),
+    grafana: GrafanaService = Depends(get_grafana_client),
+    glitchtip: GlitchTipService = Depends(get_glitchtip_client),
     nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
     settings = get_settings()
     service = OrganizationService(db, grafana, glitchtip, nginx, settings)
-    folder_uid = await service.grafana.create_folder(
-        org_id, "Application Dashboards"
-    )
-    await service.grafana.create_default_alert_rules(org_id, folder_uid, "mimir")
+
+    res = await db.execute(select(Organization).where(Organization.id == org_id))
+    org = res.scalar_one_or_none()
+    if not org or not org.grafana_org_id:
+        raise HTTPException(status_code=404, detail="Organization not found or missing Grafana org")
+
+    folder_uid = await service.grafana.create_folder(org.grafana_org_id, "Application Dashboards")
+    await service.grafana.create_default_alert_rules(org.grafana_org_id, folder_uid, "mimir")
     return {"detail": "Default alert rules created successfully"}

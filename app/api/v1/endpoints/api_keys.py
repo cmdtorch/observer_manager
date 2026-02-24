@@ -1,10 +1,12 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_nginx_manager
 from app.core.security import verify_credentials
 from app.db.session import get_db
-from app.api.deps import get_nginx_manager
 from app.models.api_key import ApiKey
 from app.models.organization import Organization
 from app.schemas.api_key import (
@@ -25,13 +27,12 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 async def create_api_key(
-    org_id: int,
+    org_id: uuid.UUID,
     request: CreateApiKeyRequest,
     db: AsyncSession = Depends(get_db),
     nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
-    # Step 1 — Validate org
     result = await db.execute(
         select(Organization).where(Organization.id == org_id, Organization.is_active == True)  # noqa: E712
     )
@@ -39,10 +40,7 @@ async def create_api_key(
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
-    # Step 2 — Generate key
     raw_key = generate_api_key(org.slug)
-
-    # Step 3 — Insert
     api_key = ApiKey(
         organization_id=org_id,
         key=raw_key,
@@ -52,7 +50,6 @@ async def create_api_key(
     await db.commit()
     await db.refresh(api_key)
 
-    # Step 4+5 — Nginx update & reload
     await nginx.update_and_reload(db)
 
     return CreateApiKeyResponse(
@@ -66,7 +63,7 @@ async def create_api_key(
 
 @router.get("/organizations/{org_id}/keys", response_model=list[ApiKeyListItem])
 async def list_api_keys(
-    org_id: int,
+    org_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_credentials),
 ):
@@ -79,7 +76,7 @@ async def list_api_keys(
     keys_result = await db.execute(
         select(ApiKey)
         .where(ApiKey.organization_id == org_id)
-        .order_by(ApiKey.id)
+        .order_by(ApiKey.created_at)
     )
     keys = keys_result.scalars().all()
     return [
@@ -96,7 +93,7 @@ async def list_api_keys(
 
 @router.delete("/keys/{key_id}", response_model=DeleteApiKeyResponse)
 async def delete_api_key(
-    key_id: int,
+    key_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
@@ -106,11 +103,9 @@ async def delete_api_key(
     if not key:
         raise HTTPException(status_code=404, detail="API key not found")
 
-    # Step 1 — Deactivate
     key.is_active = False
     await db.commit()
 
-    # Step 2+3 — Nginx
     await nginx.update_and_reload(db)
 
     return DeleteApiKeyResponse(message="API key revoked", key_id=key_id)

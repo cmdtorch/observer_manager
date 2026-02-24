@@ -1,5 +1,8 @@
 import asyncio
+import json
+import re
 import time
+from pathlib import Path
 
 import httpx
 import structlog
@@ -8,8 +11,15 @@ from app.core.config import Settings
 
 logger = structlog.get_logger()
 
+ALERTS_DIR = Path(__file__).parent.parent.parent / "assets" / "alerts"
 
-class GrafanaClient:
+
+def _load_alert(filename: str) -> dict:
+    with open(ALERTS_DIR / filename) as f:
+        return json.load(f)
+
+
+class GrafanaService:
     def __init__(self, settings: Settings, client: httpx.AsyncClient):
         self.base_url = settings.grafana_url.rstrip("/")
         self.auth = (settings.grafana_admin_user, settings.grafana_admin_password)
@@ -51,8 +61,10 @@ class GrafanaClient:
             )
             raise
 
+    # ── Org management ──────────────────────────────────────────────────────
+
     async def create_org(self, name: str) -> int:
-        """POST /api/orgs → returns org_id"""
+        """POST /api/orgs → returns grafana org_id"""
         response = await self._request("POST", "/api/orgs", json={"name": name})
         response.raise_for_status()
         return response.json()["orgId"]
@@ -70,9 +82,80 @@ class GrafanaClient:
             f"/api/orgs/{org_id}/users",
             json={"loginOrEmail": self.auth[0], "role": "Admin"},
         )
-        # 409 = already member, treat as success
         if response.status_code not in (200, 409):
             response.raise_for_status()
+
+    # ── User management ─────────────────────────────────────────────────────
+
+    async def find_user_by_email(self, email: str) -> int | None:
+        """GET /api/users/lookup?loginOrEmail={email} → returns grafana user_id or None"""
+        response = await self._request(
+            "GET", f"/api/users/lookup?loginOrEmail={email}"
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code == 200:
+            return response.json().get("id")
+        return None
+
+    async def add_existing_user_to_org(
+        self, grafana_user_id: int, grafana_org_id: int, role: str = "Editor"
+    ) -> None:
+        """POST /api/orgs/{grafana_org_id}/users — add existing Grafana user to org"""
+        response = await self._request(
+            "POST",
+            f"/api/orgs/{grafana_org_id}/users",
+            json={"loginOrEmail": str(grafana_user_id), "role": role},
+        )
+        if response.status_code not in (200, 409):
+            response.raise_for_status()
+
+    async def invite_user(
+        self, org_id: int, email: str, role: str = "Editor"
+    ) -> tuple[bool, str | None]:
+        """POST /api/org/invites — returns (success, invite_url)"""
+        response = await self._request(
+            "POST",
+            "/api/org/invites",
+            extra_headers={"X-Grafana-Org-Id": str(org_id)},
+            json={"loginOrEmail": email, "role": role, "sendEmail": True},
+        )
+        if response.status_code in (200, 201):
+            data = response.json()
+            invite_url = data.get("inviteUrl") or data.get("url")
+            return True, invite_url
+        logger.warning(
+            "grafana_invite_failed",
+            email=email,
+            org_id=org_id,
+            status_code=response.status_code,
+            body=response.text,
+        )
+        return False, None
+
+    async def get_org_users(self, org_id: int) -> list[dict]:
+        """GET /api/org/users — list users within org"""
+        response = await self._request(
+            "GET",
+            "/api/org/users",
+            extra_headers={"X-Grafana-Org-Id": str(org_id)},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    async def delete_org_user(self, org_id: int, user_id: int) -> bool:
+        """DELETE /api/orgs/{org_id}/users/{user_id}"""
+        response = await self._request(
+            "DELETE",
+            f"/api/orgs/{org_id}/users/{user_id}",
+        )
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        return True
+
+    # ── Datasources ──────────────────────────────────────────────────────────
 
     async def create_datasource(self, org_id: int, datasource_config: dict) -> dict:
         """POST /api/datasources with X-Grafana-Org-Id header"""
@@ -161,10 +244,10 @@ class GrafanaClient:
 
         return {"mimir": "mimir", "loki": "loki", "tempo": "tempo"}
 
+    # ── Dashboards ───────────────────────────────────────────────────────────
+
     async def create_folder(self, org_id: int, title: str) -> str:
         """POST /api/folders → returns folder UID"""
-        import re
-
         uid = re.sub(r"[^a-z0-9-]", "-", title.lower())[:40]
         response = await self._request(
             "POST",
@@ -194,10 +277,11 @@ class GrafanaClient:
         )
         response.raise_for_status()
 
+    # ── Service accounts (internal) ──────────────────────────────────────────
+
     async def _create_temp_service_account_token(self, org_id: int) -> tuple[str, int]:
         """Create a temporary Admin service account in the org.
         Returns (token, service_account_id).
-        The service account token is inherently org-scoped — no header tricks needed.
         """
         sa_response = await self._request(
             "POST",
@@ -224,15 +308,19 @@ class GrafanaClient:
             extra_headers={"X-Grafana-Org-Id": str(org_id)},
         )
 
-    async def create_telegram_contact_point(
-        self, org_id: int, bot_token: str, chat_id: str
-    ) -> None:
-        """Set up Telegram contact point using a temporary org-scoped service account.
+    # ── Alerting ─────────────────────────────────────────────────────────────
 
-        The provisioning API requires the caller's token to belong to the target org.
-        Basic Auth + X-Grafana-Org-Id is not enough for the provisioning endpoints.
-        A service account token created inside the org is always org-scoped.
+    async def create_contact_point(
+        self, org_id: int, telegram_chat_id: str
+    ) -> str:
+        """Create Telegram contact point via provisioning API.
+        Returns contact point name.
+        Uses a temporary org-scoped service account token.
         """
+        from app.core.config import get_settings
+        settings = get_settings()
+        bot_token = settings.telegram_bot_token
+
         sa_token, sa_id = await self._create_temp_service_account_token(org_id)
         try:
             url = f"{self.base_url}/api/v1/provisioning/contact-points"
@@ -241,7 +329,7 @@ class GrafanaClient:
                 "Content-Type": "application/json",
             }
 
-            # Wait for Alertmanager to be ready for this org before provisioning.
+            # Wait for Alertmanager to be ready
             deadline = time.monotonic() + 90
             while True:
                 probe = await self.client.get(url, headers=headers, timeout=10.0)
@@ -253,303 +341,51 @@ class GrafanaClient:
                     )
                 await asyncio.sleep(15)
 
-            start = time.monotonic()
             response = await self.client.post(
                 url,
                 headers=headers,
                 json={
                     "name": "Telegram",
                     "type": "telegram",
-                    "settings": {"bottoken": bot_token, "chatid": chat_id},
+                    "settings": {"bottoken": bot_token, "chatid": telegram_chat_id},
                     "disableResolveMessage": False,
                 },
                 timeout=10.0,
             )
-            duration_ms = round((time.monotonic() - start) * 1000, 1)
-            logger.info(
-                "grafana_request",
-                method="POST",
-                url=url,
-                status_code=response.status_code,
-                duration_ms=duration_ms,
-            )
             response.raise_for_status()
-
-            policies_url = f"{self.base_url}/api/v1/provisioning/policies"
-            start = time.monotonic()
-            policy_response = await self.client.put(
-                policies_url,
-                headers=headers,
-                json={
-                    "receiver": "Telegram",
-                    "group_by": ["grafana_folder", "alertname"],
-                },
-                timeout=10.0,
-            )
-            duration_ms = round((time.monotonic() - start) * 1000, 1)
-            logger.info(
-                "grafana_request",
-                method="PUT",
-                url=policies_url,
-                status_code=policy_response.status_code,
-                duration_ms=duration_ms,
-            )
-            policy_response.raise_for_status()
+            return "Telegram"
         finally:
             try:
                 await self._delete_service_account(org_id, sa_id)
             except Exception as exc:
                 logger.warning("grafana_delete_service_account_failed", error=str(exc))
 
-    async def create_default_alert_rules(
-        self, org_id: int, folder_uid: str, prometheus_uid: str
+    async def set_default_contact_point(
+        self, org_id: int, contact_point_name: str = "Telegram"
     ) -> None:
-        """Create High CPU, High RAM, and High Disk alert rules via provisioning API."""
+        """PUT /api/v1/provisioning/policies — set default notification policy."""
         sa_token, sa_id = await self._create_temp_service_account_token(org_id)
         try:
             headers = {
                 "Authorization": f"Bearer {sa_token}",
                 "Content-Type": "application/json",
             }
-            url = f"{self.base_url}/api/v1/provisioning/alert-rules"
-
-            rules = [
-                {
-                    "title": "High CPU",
-                    "condition": "C",
-                    "data": [
-                        {
-                            "refId": "A",
-                            "queryType": "",
-                            "relativeTimeRange": {"from": 300, "to": 0},
-                            "datasourceUid": prometheus_uid,
-                            "model": {
-                                "expr": '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m])) * 100)',
-                                "refId": "A",
-                            },
-                        },
-                        {
-                            "refId": "B",
-                            "queryType": "",
-                            "relativeTimeRange": {"from": 300, "to": 0},
-                            "datasourceUid": "__expr__",
-                            "model": {
-                                "type": "reduce",
-                                "refId": "B",
-                                "expression": "A",
-                                "reducer": "mean",
-                                "settings": {"mode": ""},
-                            },
-                        },
-                        {
-                            "refId": "C",
-                            "queryType": "",
-                            "relativeTimeRange": {"from": 300, "to": 0},
-                            "datasourceUid": "__expr__",
-                            "model": {
-                                "type": "threshold",
-                                "refId": "C",
-                                "expression": "B",
-                                "conditions": [
-                                    {
-                                        "evaluator": {"params": [80], "type": "gt"},
-                                        "operator": {"type": "and"},
-                                        "query": {"params": ["B"]},
-                                        "reducer": {"params": [], "type": "last"},
-                                        "type": "query",
-                                    }
-                                ],
-                            },
-                        },
-                    ],
-                    "folderUID": folder_uid,
-                    "for": "5m",
-                    "orgID": org_id,
-                    "ruleGroup": "default",
-                    "noDataState": "NoData",
-                    "execErrState": "Error",
+            policies_url = f"{self.base_url}/api/v1/provisioning/policies"
+            response = await self.client.put(
+                policies_url,
+                headers=headers,
+                json={
+                    "receiver": contact_point_name,
+                    "group_by": ["grafana_folder", "alertname"],
                 },
-                {
-                    "title": "High RAM",
-                    "condition": "C",
-                    "data": [
-                        {
-                            "refId": "A",
-                            "queryType": "",
-                            "relativeTimeRange": {"from": 300, "to": 0},
-                            "datasourceUid": prometheus_uid,
-                            "model": {
-                                "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
-                                "refId": "A",
-                            },
-                        },
-                        {
-                            "refId": "B",
-                            "queryType": "",
-                            "relativeTimeRange": {"from": 300, "to": 0},
-                            "datasourceUid": "__expr__",
-                            "model": {
-                                "type": "reduce",
-                                "refId": "B",
-                                "expression": "A",
-                                "reducer": "mean",
-                                "settings": {"mode": ""},
-                            },
-                        },
-                        {
-                            "refId": "C",
-                            "queryType": "",
-                            "relativeTimeRange": {"from": 300, "to": 0},
-                            "datasourceUid": "__expr__",
-                            "model": {
-                                "type": "threshold",
-                                "refId": "C",
-                                "expression": "B",
-                                "conditions": [
-                                    {
-                                        "evaluator": {"params": [85], "type": "gt"},
-                                        "operator": {"type": "and"},
-                                        "query": {"params": ["B"]},
-                                        "reducer": {"params": [], "type": "last"},
-                                        "type": "query",
-                                    }
-                                ],
-                            },
-                        },
-                    ],
-                    "folderUID": folder_uid,
-                    "for": "5m",
-                    "orgID": org_id,
-                    "ruleGroup": "default",
-                    "noDataState": "NoData",
-                    "execErrState": "Error",
-                },
-                {
-                    "title": "High Disk",
-                    "condition": "C",
-                    "data": [
-                        {
-                            "refId": "A",
-                            "queryType": "",
-                            "relativeTimeRange": {"from": 300, "to": 0},
-                            "datasourceUid": prometheus_uid,
-                            "model": {
-                                "expr": '(1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})) * 100',
-                                "refId": "A",
-                            },
-                        },
-                        {
-                            "refId": "B",
-                            "queryType": "",
-                            "relativeTimeRange": {"from": 300, "to": 0},
-                            "datasourceUid": "__expr__",
-                            "model": {
-                                "type": "reduce",
-                                "refId": "B",
-                                "expression": "A",
-                                "reducer": "mean",
-                                "settings": {"mode": ""},
-                            },
-                        },
-                        {
-                            "refId": "C",
-                            "queryType": "",
-                            "relativeTimeRange": {"from": 300, "to": 0},
-                            "datasourceUid": "__expr__",
-                            "model": {
-                                "type": "threshold",
-                                "refId": "C",
-                                "expression": "B",
-                                "conditions": [
-                                    {
-                                        "evaluator": {"params": [90], "type": "gt"},
-                                        "operator": {"type": "and"},
-                                        "query": {"params": ["B"]},
-                                        "reducer": {"params": [], "type": "last"},
-                                        "type": "query",
-                                    }
-                                ],
-                            },
-                        },
-                    ],
-                    "folderUID": folder_uid,
-                    "for": "5m",
-                    "orgID": org_id,
-                    "ruleGroup": "default",
-                    "noDataState": "NoData",
-                    "execErrState": "Error",
-                },
-            ]
-
-            for rule in rules:
-                start = time.monotonic()
-                response = await self.client.post(
-                    url, headers=headers, json=rule, timeout=10.0
-                )
-                duration_ms = round((time.monotonic() - start) * 1000, 1)
-                logger.info(
-                    "grafana_request",
-                    method="POST",
-                    url=url,
-                    status_code=response.status_code,
-                    duration_ms=duration_ms,
-                )
-                response.raise_for_status()
+                timeout=10.0,
+            )
+            response.raise_for_status()
         finally:
             try:
                 await self._delete_service_account(org_id, sa_id)
             except Exception as exc:
                 logger.warning("grafana_delete_service_account_failed", error=str(exc))
-
-    async def invite_user(
-        self, org_id: int, email: str, role: str = "Editor"
-    ) -> tuple[bool, str | None]:
-        """POST /api/org/invites — returns (success, invite_url)"""
-        response = await self._request(
-            "POST",
-            "/api/org/invites",
-            extra_headers={"X-Grafana-Org-Id": str(org_id)},
-            json={"loginOrEmail": email, "role": role, "sendEmail": True},
-        )
-        if response.status_code in (200, 201):
-            data = response.json()
-            invite_url = data.get("inviteUrl") or data.get("url")
-            return True, invite_url
-        logger.warning(
-            "grafana_invite_failed",
-            email=email,
-            org_id=org_id,
-            status_code=response.status_code,
-            body=response.text,
-        )
-        return False, None
-
-    async def switch_org(self, org_id: int) -> None:
-        """POST /api/user/using/{org_id} — switch admin context to org"""
-        response = await self._request("POST", f"/api/user/using/{org_id}")
-        response.raise_for_status()
-
-    async def list_org_users(self, org_id: int) -> list[dict]:
-        """GET /api/org/users list users within org"""
-        response = await self._request(
-            "GET",
-            "/api/org/users",
-            extra_headers={"X-Grafana-Org-Id": str(org_id)},
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data if isinstance(data, list) else []
-
-    async def delete_org_user(self, org_id: int, user_id: int) -> bool:
-        """DELETE /api/orgs/{org_id}/users/{user_id} � remove user from org"""
-        response = await self._request(
-            "DELETE",
-            f"/api/orgs/{org_id}/users/{user_id}",
-        )
-        if response.status_code == 404:
-            return False
-        response.raise_for_status()
-        return True
 
     async def upsert_telegram_contact_point(
         self, org_id: int, bot_token: str, chat_id: str
@@ -563,7 +399,6 @@ class GrafanaClient:
                 "Content-Type": "application/json",
             }
 
-            # Wait for Alertmanager to be ready for this org before provisioning.
             deadline = time.monotonic() + 90
             while True:
                 probe = await self.client.get(base_url, headers=headers, timeout=10.0)
@@ -582,9 +417,7 @@ class GrafanaClient:
                 "disableResolveMessage": False,
             }
 
-            response = await self.client.get(
-                base_url, headers=headers, timeout=10.0
-            )
+            response = await self.client.get(base_url, headers=headers, timeout=10.0)
             response.raise_for_status()
             data = response.json()
             if isinstance(data, dict):
@@ -638,3 +471,75 @@ class GrafanaClient:
                 await self._delete_service_account(org_id, sa_id)
             except Exception as exc:
                 logger.warning("grafana_delete_service_account_failed", error=str(exc))
+
+    async def create_alert_rule(self, org_id: int, folder_uid: str, rule_config: dict) -> None:
+        """Create a single alert rule via provisioning API."""
+        sa_token, sa_id = await self._create_temp_service_account_token(org_id)
+        try:
+            headers = {
+                "Authorization": f"Bearer {sa_token}",
+                "Content-Type": "application/json",
+            }
+            rule = dict(rule_config)
+            rule["folderUID"] = folder_uid
+            rule["orgID"] = org_id
+            # Replace datasource placeholder
+            for step in rule.get("data", []):
+                if step.get("datasourceUid") == "{{prometheus_uid}}":
+                    step["datasourceUid"] = "mimir"
+
+            url = f"{self.base_url}/api/v1/provisioning/alert-rules"
+            response = await self.client.post(url, headers=headers, json=rule, timeout=10.0)
+            response.raise_for_status()
+        finally:
+            try:
+                await self._delete_service_account(org_id, sa_id)
+            except Exception as exc:
+                logger.warning("grafana_delete_service_account_failed", error=str(exc))
+
+    async def create_default_alert_rules(
+        self, org_id: int, folder_uid: str, prometheus_uid: str = "mimir"
+    ) -> None:
+        """Create High CPU, High RAM, and High Disk alert rules."""
+        sa_token, sa_id = await self._create_temp_service_account_token(org_id)
+        try:
+            headers = {
+                "Authorization": f"Bearer {sa_token}",
+                "Content-Type": "application/json",
+            }
+            url = f"{self.base_url}/api/v1/provisioning/alert-rules"
+
+            alert_files = ["high_cpu.json", "high_ram.json", "high_disk.json"]
+            for filename in alert_files:
+                rule = _load_alert(filename)
+                rule["folderUID"] = folder_uid
+                rule["orgID"] = org_id
+                for step in rule.get("data", []):
+                    if step.get("datasourceUid") == "{{prometheus_uid}}":
+                        step["datasourceUid"] = prometheus_uid
+
+                start = time.monotonic()
+                response = await self.client.post(url, headers=headers, json=rule, timeout=10.0)
+                duration_ms = round((time.monotonic() - start) * 1000, 1)
+                logger.info(
+                    "grafana_request",
+                    method="POST",
+                    url=url,
+                    status_code=response.status_code,
+                    duration_ms=duration_ms,
+                )
+                response.raise_for_status()
+        finally:
+            try:
+                await self._delete_service_account(org_id, sa_id)
+            except Exception as exc:
+                logger.warning("grafana_delete_service_account_failed", error=str(exc))
+
+    # Keep backward-compat alias
+    async def switch_org(self, org_id: int) -> None:
+        response = await self._request("POST", f"/api/user/using/{org_id}")
+        response.raise_for_status()
+
+
+# Backward-compat alias
+GrafanaClient = GrafanaService
