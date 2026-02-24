@@ -1,4 +1,5 @@
 import json
+import traceback
 from pathlib import Path
 
 import structlog
@@ -166,7 +167,7 @@ class OrganizationService:
                     # Grafana
                     grafana_user_id = await self.grafana.find_user_by_email(email)
                     if grafana_user_id:
-                        await self.grafana.add_existing_user_to_org(grafana_user_id, grafana_org_id)
+                        await self.grafana.add_existing_user_to_org(email, grafana_org_id)
                         user.grafana_id = grafana_user_id
                     else:
                         ok, invite_url = await self.grafana.invite_user(grafana_org_id, email)
@@ -206,6 +207,7 @@ class OrganizationService:
             await self.db.rollback()
             raise
         except Exception as exc:
+            traceback.print_exc()
             log.error("org_create_failed", error=str(exc))
             await self.db.rollback()
             await rollback.rollback()
@@ -249,10 +251,13 @@ class OrganizationService:
 
     async def _find_or_create_user(self, email: str) -> User:
         """Find existing User by email or create a new one."""
-        result = await self.db.execute(select(User).where(User.email == email))
+        result = await self.db.execute(
+            select(User).where(User.email == email).options(selectinload(User.orgs))
+        )
         user = result.scalar_one_or_none()
         if not user:
             user = User(email=email)
+            user.orgs = []
             self.db.add(user)
             await self.db.flush()
         return user

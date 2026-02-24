@@ -1,15 +1,123 @@
+import uuid
+
 import structlog
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import verify_credentials
 from app.db.session import get_db
 from app.models.organization import Organization
 from app.models.telegram_group import TelegramGroup
-from app.schemas.telegram_group import TelegramWebhookResponse
+from app.schemas.telegram_group import (
+    TelegramGroupCreate,
+    TelegramGroupRead,
+    TelegramGroupUpdate,
+    TelegramWebhookResponse,
+)
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+
+@router.get("/telegram/groups", response_model=list[TelegramGroupRead])
+async def list_telegram_groups(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(verify_credentials),
+):
+    result = await db.execute(select(TelegramGroup).order_by(TelegramGroup.created_at))
+    return result.scalars().all()
+
+
+@router.get("/telegram/groups/{group_id}", response_model=TelegramGroupRead)
+async def get_telegram_group(
+    group_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(verify_credentials),
+):
+    result = await db.execute(select(TelegramGroup).where(TelegramGroup.id == group_id))
+    group = result.scalar_one_or_none()
+    if not group:
+        raise HTTPException(status_code=404, detail="TelegramGroup not found")
+    return group
+
+
+@router.post(
+    "/telegram/groups",
+    response_model=TelegramGroupRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_telegram_group(
+    payload: TelegramGroupCreate,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(verify_credentials),
+):
+    existing = await db.execute(
+        select(TelegramGroup).where(TelegramGroup.chat_id == payload.chat_id)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="TelegramGroup with this chat_id already exists")
+
+    if payload.org_id:
+        org_result = await db.execute(
+            select(Organization).where(
+                Organization.id == payload.org_id,
+                Organization.is_active == True,  # noqa: E712
+            )
+        )
+        if not org_result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Organization not found")
+
+    group = TelegramGroup(name=payload.name, chat_id=payload.chat_id, org_id=payload.org_id)
+    db.add(group)
+    await db.commit()
+    await db.refresh(group)
+    return group
+
+
+@router.patch("/telegram/groups/{group_id}", response_model=TelegramGroupRead)
+async def update_telegram_group(
+    group_id: uuid.UUID,
+    payload: TelegramGroupUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(verify_credentials),
+):
+    result = await db.execute(select(TelegramGroup).where(TelegramGroup.id == group_id))
+    group = result.scalar_one_or_none()
+    if not group:
+        raise HTTPException(status_code=404, detail="TelegramGroup not found")
+
+    if payload.org_id is not None:
+        org_result = await db.execute(
+            select(Organization).where(
+                Organization.id == payload.org_id,
+                Organization.is_active == True,  # noqa: E712
+            )
+        )
+        if not org_result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Organization not found")
+        group.org_id = payload.org_id
+
+    if payload.name is not None:
+        group.name = payload.name
+
+    await db.commit()
+    await db.refresh(group)
+    return group
+
+
+@router.delete("/telegram/groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_telegram_group(
+    group_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(verify_credentials),
+):
+    result = await db.execute(select(TelegramGroup).where(TelegramGroup.id == group_id))
+    group = result.scalar_one_or_none()
+    if not group:
+        raise HTTPException(status_code=404, detail="TelegramGroup not found")
+    await db.delete(group)
+    await db.commit()
 
 
 @router.post("/telegram/webhook", response_model=TelegramWebhookResponse)
