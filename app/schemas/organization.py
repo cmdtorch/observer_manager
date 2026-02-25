@@ -3,12 +3,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, field_validator
 
-from app.schemas.user import UserDetail, UserRead
+from app.schemas.telegram_group import TelegramGroupRead
+from app.schemas.user import UserRead
 
 
 class CreateOrganizationRequest(BaseModel):
     name: str
-    telegram_chat_id: str | None = None
+    telegram_group_id: uuid.UUID | None = None
     users: list[str] | None = None  # list of emails
 
     @field_validator("name")
@@ -51,6 +52,8 @@ class OrganizationListItem(BaseModel):
     grafana_org_id: int | None
     glitchtip_org_id: int | None
     glitchtip_slug: str | None
+    telegram_group_id: uuid.UUID | None
+    telegram_group_name: str | None
     is_active: bool
     created_at: datetime
 
@@ -80,7 +83,7 @@ class OrganizationDetail(BaseModel):
     grafana_org_id: int | None
     glitchtip_org_id: int | None
     glitchtip_slug: str | None
-    telegram_chat: str | None
+    telegram_group: TelegramGroupRead | None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -98,12 +101,13 @@ class DeleteOrganizationResponse(BaseModel):
 
 
 class SetupTelegramRequest(BaseModel):
-    chat_id: str
+    telegram_group_id: uuid.UUID
 
 
 class SetupTelegramResponse(BaseModel):
     org_id: uuid.UUID
-    chat_id: str
+    telegram_group_id: uuid.UUID
+    telegram_group_name: str
     message: str
 
 

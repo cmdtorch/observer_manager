@@ -9,6 +9,7 @@ class TelegramGroupRead(BaseModel):
     name: str
     chat_id: str
     org_id: uuid.UUID | None
+    org_name: str | None
     created_at: datetime
     updated_at: datetime
 

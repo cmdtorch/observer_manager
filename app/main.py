@@ -36,6 +36,19 @@ async def lifespan(app: FastAPI):
     app.state.glitchtip_client = GlitchTipService(settings, http_client)
     app.state.nginx_manager = NginxManager(settings)
 
+    if settings.telegram_bot_token and settings.telegram_webhook_url:
+        try:
+            resp = await http_client.post(
+                f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook",
+                json={
+                    "url": settings.telegram_webhook_url,
+                    "allowed_updates": ["message", "my_chat_member"],
+                },
+            )
+            logger.info("telegram_webhook_set", status=resp.status_code, body=resp.json())
+        except Exception as e:
+            logger.warning("telegram_webhook_set_failed", error=str(e))
+
     logger.info("observer_manager_started")
     yield
 

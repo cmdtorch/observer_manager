@@ -1,7 +1,7 @@
 import uuid
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -24,6 +24,7 @@ from app.schemas.organization import (
     SetupTelegramResponse,
     SyncOrganizationResponse,
 )
+from app.schemas.telegram_group import TelegramGroupRead
 from app.schemas.user import UserRead
 from app.services.clients.glitchtip_client import GlitchTipService
 from app.services.clients.grafana_client import GrafanaService
@@ -55,13 +56,37 @@ async def create_organization(
 
 @router.get("/organizations", response_model=list[OrganizationListItem])
 async def list_organizations(
+    without_telegram: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(verify_credentials),
 ):
-    result = await db.execute(
-        select(Organization).where(Organization.is_active == True).order_by(Organization.created_at)  # noqa: E712
+    query = (
+        select(Organization)
+        .where(Organization.is_active == True)  # noqa: E712
+        .options(selectinload(Organization.telegram_group))
+        .order_by(Organization.created_at)
     )
-    return result.scalars().all()
+    if without_telegram:
+        query = query.where(Organization.telegram_group_id == None)  # noqa: E711
+
+    result = await db.execute(query)
+    orgs = result.scalars().all()
+
+    return [
+        OrganizationListItem(
+            id=org.id,
+            name=org.name,
+            slug=org.slug,
+            grafana_org_id=org.grafana_org_id,
+            glitchtip_org_id=org.glitchtip_org_id,
+            glitchtip_slug=org.glitchtip_slug,
+            telegram_group_id=org.telegram_group_id,
+            telegram_group_name=org.telegram_group.name if org.telegram_group else None,
+            is_active=org.is_active,
+            created_at=org.created_at,
+        )
+        for org in orgs
+    ]
 
 
 @router.get("/organizations/{org_id}", response_model=OrganizationDetail)
@@ -80,6 +105,7 @@ async def get_organization(
             selectinload(Organization.api_keys),
             selectinload(Organization.applications),
             selectinload(Organization.users),
+            selectinload(Organization.telegram_group),
         )
     )
     org = result.scalar_one_or_none()
@@ -95,6 +121,19 @@ async def get_organization(
 
     background_tasks.add_task(_sync_in_bg)
 
+    tg_read: TelegramGroupRead | None = None
+    if org.telegram_group:
+        tg = org.telegram_group
+        tg_read = TelegramGroupRead(
+            id=tg.id,
+            name=tg.name,
+            chat_id=tg.chat_id,
+            org_id=org.id,
+            org_name=org.name,
+            created_at=tg.created_at,
+            updated_at=tg.updated_at,
+        )
+
     return OrganizationDetail(
         id=org.id,
         name=org.name,
@@ -102,7 +141,7 @@ async def get_organization(
         grafana_org_id=org.grafana_org_id,
         glitchtip_org_id=org.glitchtip_org_id,
         glitchtip_slug=org.glitchtip_slug,
-        telegram_chat=org.telegram_chat,
+        telegram_group=tg_read,
         is_active=org.is_active,
         created_at=org.created_at,
         updated_at=org.updated_at,
@@ -169,12 +208,7 @@ async def setup_telegram(
 ):
     settings = get_settings()
     service = OrganizationService(db, grafana, glitchtip, nginx, settings)
-    try:
-        return await service.setup_telegram(org_id, request.chat_id)
-    except httpx.HTTPStatusError:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Grafana API unavailable")
-    except httpx.RequestError:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Grafana API unavailable")
+    return await service.setup_telegram(org_id, request.telegram_group_id)
 
 
 @router.delete("/organizations/{org_id}", response_model=DeleteOrganizationResponse)

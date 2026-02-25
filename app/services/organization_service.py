@@ -1,4 +1,5 @@
 import json
+import uuid
 from pathlib import Path
 
 import structlog
@@ -10,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import Settings
 from app.models.api_key import ApiKey
 from app.models.organization import Organization
+from app.models.telegram_group import TelegramGroup
 from app.models.user import User
 from app.schemas.organization import (
     CreateOrganizationRequest,
@@ -82,12 +84,36 @@ class OrganizationService:
                 detail=f"Organization with slug '{slug}' already exists",
             )
 
+        # Validate telegram_group_id if provided (before any external calls)
+        tg_group: TelegramGroup | None = None
+        if request.telegram_group_id:
+            tg_result = await self.db.execute(
+                select(TelegramGroup).where(TelegramGroup.id == request.telegram_group_id)
+            )
+            tg_group = tg_result.scalar_one_or_none()
+            if not tg_group:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="TelegramGroup not found",
+                )
+            # Check not already linked to another org
+            linked_org_result = await self.db.execute(
+                select(Organization).where(
+                    Organization.telegram_group_id == tg_group.id,
+                    Organization.is_active == True,  # noqa: E712
+                )
+            )
+            if linked_org_result.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="This Telegram group is already linked to another organization",
+                )
+
         # Step 2 — Save to DB
         log.info("org_create_step2_save_db")
         org = Organization(
             name=request.name,
             slug=slug,
-            telegram_chat=request.telegram_chat_id,
         )
         self.db.add(org)
         await self.db.flush()
@@ -126,11 +152,16 @@ class OrganizationService:
 
             # Step 7 — Telegram contact point (optional, non-fatal)
             telegram_configured = False
-            if request.telegram_chat_id:
+            if tg_group is not None:
                 log.info("org_create_step7_telegram")
+                contact_point_name = f"telegram-{slug}"
                 try:
-                    await self.grafana.create_contact_point(grafana_org_id, request.telegram_chat_id)
-                    await self.grafana.set_default_contact_point(grafana_org_id, "Telegram")
+                    await self.grafana.create_contact_point(
+                        grafana_org_id, tg_group.chat_id, contact_point_name
+                    )
+                    await self.grafana.set_default_contact_point(
+                        grafana_org_id, contact_point_name
+                    )
                     telegram_configured = True
                 except Exception as exc:
                     log.warning("org_create_telegram_failed_non_fatal", error=str(exc))
@@ -198,8 +229,12 @@ class OrganizationService:
                 description="Default key",
             )
             self.db.add(api_key_obj)
-            await self.db.flush()
 
+            # Link TelegramGroup to org
+            if tg_group is not None:
+                org.telegram_group_id = tg_group.id
+
+            await self.db.flush()
             await self.db.commit()
 
         except HTTPException:
@@ -257,28 +292,95 @@ class OrganizationService:
             await self.db.flush()
         return user
 
-    async def setup_telegram(self, org_id, chat_id: str) -> SetupTelegramResponse:
-        result = await self.db.execute(
+    async def setup_telegram(
+        self, org_id: uuid.UUID, telegram_group_id: uuid.UUID
+    ) -> SetupTelegramResponse:
+        # Fetch org
+        org_result = await self.db.execute(
             select(Organization).where(Organization.id == org_id)
         )
-        org = result.scalar_one_or_none()
+        org = org_result.scalar_one_or_none()
         if not org:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-        if not org.grafana_org_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Organization has no Grafana org")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Organization not found",
+            )
 
-        await self.grafana.upsert_telegram_contact_point(
-            org.grafana_org_id,
-            self.settings.telegram_bot_token,
-            chat_id,
+        # Fetch TelegramGroup
+        tg_result = await self.db.execute(
+            select(TelegramGroup).where(TelegramGroup.id == telegram_group_id)
         )
+        tg_group = tg_result.scalar_one_or_none()
+        if not tg_group:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="TelegramGroup not found",
+            )
 
-        org.telegram_chat = chat_id
+        # Check not already linked to a different org
+        linked_org_result = await self.db.execute(
+            select(Organization).where(
+                Organization.telegram_group_id == tg_group.id,
+                Organization.id != org.id,
+            )
+        )
+        if linked_org_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This Telegram group is already linked to another organization",
+            )
+
+        # Grafana contact point setup (only if org has grafana_org_id)
+        if org.grafana_org_id:
+            contact_point_name = f"telegram-{org.slug}"
+            try:
+                contact_points = await self.grafana.get_contact_points(org.grafana_org_id)
+                existing = next(
+                    (
+                        cp for cp in contact_points
+                        if cp.get("type") == "telegram"
+                        or str(cp.get("name", "")).lower() == contact_point_name.lower()
+                    ),
+                    None,
+                )
+                if existing:
+                    uid = existing.get("uid") or existing.get("id")
+                    await self.grafana.update_contact_point(
+                        org.grafana_org_id, uid, tg_group.chat_id
+                    )
+                else:
+                    await self.grafana.create_contact_point(
+                        org.grafana_org_id, tg_group.chat_id, contact_point_name
+                    )
+                    await self.grafana.set_default_contact_point(
+                        org.grafana_org_id, contact_point_name
+                    )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "setup_telegram_grafana_failed",
+                    org_id=str(org_id),
+                    error=str(exc),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Grafana contact point update failed: {exc}",
+                )
+        else:
+            logger.warning(
+                "setup_telegram_no_grafana_org",
+                org_id=str(org_id),
+                message="Skipping Grafana steps — org has no grafana_org_id",
+            )
+
+        org.telegram_group_id = tg_group.id
         await self.db.commit()
 
         return SetupTelegramResponse(
-            org_id=org_id,
-            chat_id=chat_id,
+            org_id=org.id,
+            telegram_group_id=tg_group.id,
+            telegram_group_name=tg_group.name,
             message="Telegram contact point updated successfully",
         )
 

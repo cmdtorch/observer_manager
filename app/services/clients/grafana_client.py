@@ -310,18 +310,47 @@ class GrafanaService:
 
     # ── Alerting ─────────────────────────────────────────────────────────────
 
+    async def get_contact_points(self, grafana_org_id: int) -> list[dict]:
+        """GET /api/v1/provisioning/contact-points scoped to org."""
+        sa_token, sa_id = await self._create_temp_service_account_token(grafana_org_id)
+        try:
+            url = f"{self.base_url}/api/v1/provisioning/contact-points"
+            headers = {
+                "Authorization": f"Bearer {sa_token}",
+                "Content-Type": "application/json",
+            }
+
+            # Wait for Alertmanager to be ready
+            deadline = time.monotonic() + 90
+            while True:
+                response = await self.client.get(url, headers=headers, timeout=10.0)
+                if response.status_code == 200:
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Alertmanager not ready after 90s (last status: {response.status_code})"
+                    )
+                await asyncio.sleep(15)
+
+            data = response.json()
+            if isinstance(data, list):
+                return data
+            return data.get("items") or data.get("contactPoints") or []
+        finally:
+            try:
+                await self._delete_service_account(grafana_org_id, sa_id)
+            except Exception as exc:
+                logger.warning("grafana_delete_service_account_failed", error=str(exc))
+
     async def create_contact_point(
-        self, org_id: int, telegram_chat_id: str
-    ) -> str:
-        """Create Telegram contact point via provisioning API.
-        Returns contact point name.
-        Uses a temporary org-scoped service account token.
-        """
+        self, grafana_org_id: int, chat_id: str, name: str
+    ) -> dict:
+        """POST /api/v1/provisioning/contact-points — create telegram contact point."""
         from app.core.config import get_settings
         settings = get_settings()
         bot_token = settings.telegram_bot_token
 
-        sa_token, sa_id = await self._create_temp_service_account_token(org_id)
+        sa_token, sa_id = await self._create_temp_service_account_token(grafana_org_id)
         try:
             url = f"{self.base_url}/api/v1/provisioning/contact-points"
             headers = {
@@ -345,26 +374,59 @@ class GrafanaService:
                 url,
                 headers=headers,
                 json={
-                    "name": "Telegram",
+                    "name": name,
                     "type": "telegram",
-                    "settings": {"bottoken": bot_token, "chatid": telegram_chat_id},
+                    "settings": {"bottoken": bot_token, "chatid": chat_id},
                     "disableResolveMessage": False,
                 },
                 timeout=10.0,
             )
             response.raise_for_status()
-            return "Telegram"
+            return response.json()
         finally:
             try:
-                await self._delete_service_account(org_id, sa_id)
+                await self._delete_service_account(grafana_org_id, sa_id)
+            except Exception as exc:
+                logger.warning("grafana_delete_service_account_failed", error=str(exc))
+
+    async def update_contact_point(
+        self, grafana_org_id: int, uid: str, chat_id: str
+    ) -> dict:
+        """PUT /api/v1/provisioning/contact-points/{uid} — update chat_id in settings."""
+        from app.core.config import get_settings
+        settings = get_settings()
+        bot_token = settings.telegram_bot_token
+
+        sa_token, sa_id = await self._create_temp_service_account_token(grafana_org_id)
+        try:
+            url = f"{self.base_url}/api/v1/provisioning/contact-points/{uid}"
+            headers = {
+                "Authorization": f"Bearer {sa_token}",
+                "Content-Type": "application/json",
+            }
+            response = await self.client.put(
+                url,
+                headers=headers,
+                json={
+                    "type": "telegram",
+                    "settings": {"bottoken": bot_token, "chatid": chat_id},
+                    "disableResolveMessage": False,
+                },
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            return response.json()
+        finally:
+            try:
+                await self._delete_service_account(grafana_org_id, sa_id)
             except Exception as exc:
                 logger.warning("grafana_delete_service_account_failed", error=str(exc))
 
     async def set_default_contact_point(
-        self, org_id: int, contact_point_name: str = "Telegram"
-    ) -> None:
+        self, grafana_org_id: int, contact_point_name: str
+    ) -> dict:
         """PUT /api/v1/provisioning/policies — set default notification policy."""
-        sa_token, sa_id = await self._create_temp_service_account_token(org_id)
+        sa_token, sa_id = await self._create_temp_service_account_token(grafana_org_id)
         try:
             headers = {
                 "Authorization": f"Bearer {sa_token}",
@@ -381,9 +443,10 @@ class GrafanaService:
                 timeout=10.0,
             )
             response.raise_for_status()
+            return response.json()
         finally:
             try:
-                await self._delete_service_account(org_id, sa_id)
+                await self._delete_service_account(grafana_org_id, sa_id)
             except Exception as exc:
                 logger.warning("grafana_delete_service_account_failed", error=str(exc))
 

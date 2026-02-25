@@ -29,6 +29,18 @@ class TelegramGroup(Base):
         onupdate=func.now(),
     )
 
+    # Legacy back-ref via TelegramGroup.org_id (maintained by webhook auto-create)
     org: Mapped["Organization | None"] = relationship(  # noqa: F821
-        "Organization", back_populates="telegram_groups"
+        "Organization",
+        foreign_keys=[org_id],
+        primaryjoin="TelegramGroup.org_id == Organization.id",
+    )
+
+    # Canonical back-ref via Organization.telegram_group_id
+    organization: Mapped["Organization | None"] = relationship(  # noqa: F821
+        "Organization",
+        foreign_keys="[Organization.telegram_group_id]",
+        primaryjoin="Organization.telegram_group_id == TelegramGroup.id",
+        back_populates="telegram_group",
+        uselist=False,
     )

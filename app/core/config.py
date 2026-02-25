@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_bot_token: str = ""
+    telegram_webhook_url: str = ""
 
     # Nginx
     nginx_map_path: str = "/shared/nginx/api_keys.map"
