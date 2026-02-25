@@ -270,7 +270,7 @@ async def remove_user_from_org(
     db_user: User | None = None
     try:
         uid = uuid.UUID(user_id)
-        u_result = await db.execute(select(User).where(User.id == uid))
+        u_result = await db.execute(select(User).where(User.id == uid).options(selectinload(User.orgs)))
         db_user = u_result.scalar_one_or_none()
     except ValueError:
         pass
