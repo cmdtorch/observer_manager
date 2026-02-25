@@ -393,7 +393,7 @@ class GrafanaService:
                 logger.warning("grafana_delete_service_account_failed", error=str(exc))
 
     async def update_contact_point(
-        self, grafana_org_id: int, uid: str, chat_id: str
+        self, grafana_org_id: int, uid: str, chat_id: str, name: str
     ) -> dict:
         """PUT /api/v1/provisioning/contact-points/{uid} — update chat_id in settings."""
         from app.core.config import get_settings
@@ -411,6 +411,7 @@ class GrafanaService:
                 url,
                 headers=headers,
                 json={
+                    "name": name,
                     "type": "telegram",
                     "settings": {"bottoken": bot_token, "chatid": chat_id},
                     "disableResolveMessage": False,

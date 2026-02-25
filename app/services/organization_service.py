@@ -349,7 +349,7 @@ class OrganizationService:
                 if existing:
                     uid = existing.get("uid") or existing.get("id")
                     await self.grafana.update_contact_point(
-                        org.grafana_org_id, uid, tg_group.chat_id
+                        org.grafana_org_id, uid, tg_group.chat_id, contact_point_name
                     )
                 else:
                     await self.grafana.create_contact_point(
