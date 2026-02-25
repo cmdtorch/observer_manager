@@ -10,6 +10,8 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import Settings
 from app.models.api_key import ApiKey
+from app.models.application import Application
+from app.models.invited_user import InvitedUser
 from app.models.organization import Organization
 from app.models.telegram_group import TelegramGroup
 from app.models.user import User
@@ -473,13 +475,13 @@ class OrganizationService:
         log = log.bind(org_name=org.name, slug=org.slug)
         log.info("org_delete_step1_found")
 
-        # Step 2 — Deactivate API keys
-        log.info("org_delete_step2_deactivate_keys")
+        # Step 2 — Delete API keys
+        log.info("org_delete_step2_delete_keys")
         keys_result = await self.db.execute(
             select(ApiKey).where(ApiKey.organization_id == org_id)
         )
         for key in keys_result.scalars().all():
-            key.is_active = False
+            await self.db.delete(key)
 
         # Step 3 — Nginx
         log.info("org_delete_step3_nginx")
@@ -505,9 +507,30 @@ class OrganizationService:
             except Exception as exc:
                 log.error("org_delete_glitchtip_failed", error=str(exc))
 
-        # Step 6 — Soft delete
-        log.info("org_delete_step6_soft_delete")
-        org.is_active = False
+        # Step 6 — Hard delete (clear FKs pointing to this org, then delete children, then org)
+        log.info("org_delete_step6_hard_delete")
+
+        # NULL out legacy TelegramGroup.org_id references (nullable FK)
+        tg_result = await self.db.execute(
+            select(TelegramGroup).where(TelegramGroup.org_id == org_id)
+        )
+        for tg in tg_result.scalars().all():
+            tg.org_id = None
+
+        # Delete child records with non-cascading FKs
+        apps_result = await self.db.execute(
+            select(Application).where(Application.organization_id == org_id)
+        )
+        for app in apps_result.scalars().all():
+            await self.db.delete(app)
+
+        invited_result = await self.db.execute(
+            select(InvitedUser).where(InvitedUser.organization_id == org_id)
+        )
+        for invited in invited_result.scalars().all():
+            await self.db.delete(invited)
+
+        await self.db.delete(org)
         await self.db.commit()
 
         log.info("org_delete_success")
