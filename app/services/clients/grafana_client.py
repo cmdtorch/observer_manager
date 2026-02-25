@@ -99,13 +99,13 @@ class GrafanaService:
         return None
 
     async def add_existing_user_to_org(
-        self, grafana_user_id: int, grafana_org_id: int, role: str = "Editor"
+        self, login_or_email: str, grafana_org_id: int, role: str = "Editor"
     ) -> None:
         """POST /api/orgs/{grafana_org_id}/users — add existing Grafana user to org"""
         response = await self._request(
             "POST",
             f"/api/orgs/{grafana_org_id}/users",
-            json={"loginOrEmail": str(grafana_user_id), "role": role},
+            json={"loginOrEmail": login_or_email, "role": role},
         )
         if response.status_code not in (200, 409):
             response.raise_for_status()
@@ -255,6 +255,9 @@ class GrafanaService:
             extra_headers={"X-Grafana-Org-Id": str(org_id)},
             json={"title": title, "uid": uid},
         )
+        if response.status_code == 412:
+            # Folder already exists with this UID — return it as-is
+            return uid
         response.raise_for_status()
         return response.json()["uid"]
 

@@ -56,7 +56,7 @@ class GlitchTipService:
         )
         response.raise_for_status()
         data = response.json()
-        return data["id"], data["slug"]
+        return int(data["id"]), data["slug"]
 
     async def delete_org(self, slug: str) -> None:
         """DELETE /api/0/organizations/{slug}/"""
@@ -84,7 +84,8 @@ class GlitchTipService:
                 or member.get("user", {}).get("email")
             )
             if member_email and member_email.lower() == email.lower():
-                return member.get("id") or member.get("user", {}).get("id")
+                raw_id = member.get("id") or member.get("user", {}).get("id")
+                return int(raw_id) if raw_id is not None else None
         return None
 
     async def add_existing_user_to_org(self, org_slug: str, email: str) -> None:

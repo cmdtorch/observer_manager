@@ -189,17 +189,22 @@ async def add_user_to_org(
 
     # Find or create user
     if request.user_id:
-        user_result = await db.execute(select(User).where(User.id == request.user_id))
+        user_result = await db.execute(
+            select(User).where(User.id == request.user_id).options(selectinload(User.orgs))
+        )
         user = user_result.scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
     else:
-        user_result = await db.execute(select(User).where(User.email == request.email))
+        user_result = await db.execute(
+            select(User).where(User.email == request.email).options(selectinload(User.orgs))
+        )
         user = user_result.scalar_one_or_none()
         if not user:
             user = User(email=request.email)
             db.add(user)
             await db.flush()
+            await db.refresh(user, attribute_names=["orgs"])
 
     # Link to org
     if org not in user.orgs:
@@ -210,7 +215,7 @@ async def add_user_to_org(
         try:
             grafana_id = await grafana.find_user_by_email(user.email)
             if grafana_id:
-                await grafana.add_existing_user_to_org(grafana_id, org.grafana_org_id)
+                await grafana.add_existing_user_to_org(user.email, org.grafana_org_id)
                 user.grafana_id = grafana_id
             else:
                 ok, invite_url = await grafana.invite_user(org.grafana_org_id, user.email)

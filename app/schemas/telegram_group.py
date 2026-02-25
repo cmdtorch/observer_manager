@@ -22,6 +22,11 @@ class TelegramGroupCreate(BaseModel):
     org_id: uuid.UUID | None = None
 
 
+class TelegramGroupUpdate(BaseModel):
+    name: str | None = None
+    org_id: uuid.UUID | None = None
+
+
 class TelegramWebhookResponse(BaseModel):
     ok: bool
     message: str
