@@ -539,6 +539,92 @@ class GrafanaService:
             except Exception as exc:
                 logger.warning("grafana_delete_service_account_failed", error=str(exc))
 
+    async def delete_default_email_contact_point(self, org_id: int) -> None:
+        """DELETE the default email contact point if it exists and is not in use."""
+        sa_token, sa_id = await self._create_temp_service_account_token(org_id)
+        try:
+            url = f"{self.base_url}/api/v1/provisioning/contact-points"
+            headers = {
+                "Authorization": f"Bearer {sa_token}",
+                "Content-Type": "application/json",
+            }
+
+            # Wait for Alertmanager to be ready
+            deadline = time.monotonic() + 90
+            while True:
+                response = await self.client.get(url, headers=headers, timeout=10.0)
+                if response.status_code == 200:
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Alertmanager not ready after 90s (last status: {response.status_code})"
+                    )
+                await asyncio.sleep(15)
+
+            data = response.json()
+            if isinstance(data, dict):
+                items = data.get("items") or data.get("contactPoints") or []
+            elif isinstance(data, list):
+                items = data
+            else:
+                items = []
+
+            default_email_names = {"grafana-default-email", "email receiver"}
+            target = next(
+                (
+                    item
+                    for item in items
+                    if str(item.get("name", "")).lower() in default_email_names
+                ),
+                None,
+            )
+
+            if not target:
+                logger.info(
+                    "grafana_default_email_contact_point_not_found", org_id=org_id
+                )
+                return
+
+            uid = target.get("uid") or target.get("id")
+            if not uid:
+                logger.info(
+                    "grafana_default_email_contact_point_no_uid",
+                    org_id=org_id,
+                    name=target.get("name"),
+                )
+                return
+
+            delete_response = await self.client.delete(
+                f"{url}/{uid}", headers=headers, timeout=10.0
+            )
+            if delete_response.status_code == 409:
+                logger.warning(
+                    "grafana_default_email_contact_point_in_use",
+                    org_id=org_id,
+                    uid=uid,
+                )
+                return
+            delete_response.raise_for_status()
+            logger.info(
+                "grafana_default_email_contact_point_deleted", org_id=org_id, uid=uid
+            )
+        finally:
+            try:
+                await self._delete_service_account(org_id, sa_id)
+            except Exception as exc:
+                logger.warning("grafana_delete_service_account_failed", error=str(exc))
+
+    async def setup_new_org(
+        self, org_id: int, folder_uid: str, bot_token: str, chat_id: str
+    ) -> None:
+        """Orchestrate Telegram alerting setup for a new org.
+
+        Sets Telegram as the root notification policy, then removes the
+        default email contact point which is no longer needed.
+        """
+        await self.upsert_telegram_contact_point(org_id, bot_token, chat_id)
+        await self.delete_default_email_contact_point(org_id)
+
     async def create_alert_rule(self, org_id: int, folder_uid: str, rule_config: dict) -> None:
         """Create a single alert rule via provisioning API."""
         sa_token, sa_id = await self._create_temp_service_account_token(org_id)
