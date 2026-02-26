@@ -540,73 +540,62 @@ class GrafanaService:
                 logger.warning("grafana_delete_service_account_failed", error=str(exc))
 
     async def delete_default_email_contact_point(self, org_id: int) -> None:
-        """DELETE the default email contact point if it exists and is not in use."""
+        """Remove the default email receiver from Alertmanager config via the config API."""
         sa_token, sa_id = await self._create_temp_service_account_token(org_id)
         try:
-            url = f"{self.base_url}/api/v1/provisioning/contact-points"
+            config_url = f"{self.base_url}/api/alertmanager/grafana/config/api/v1/alertmanager"
             headers = {
                 "Authorization": f"Bearer {sa_token}",
                 "Content-Type": "application/json",
             }
 
-            # Wait for Alertmanager to be ready
-            deadline = time.monotonic() + 90
-            while True:
-                response = await self.client.get(url, headers=headers, timeout=10.0)
-                if response.status_code == 200:
-                    break
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(
-                        f"Alertmanager not ready after 90s (last status: {response.status_code})"
-                    )
-                await asyncio.sleep(15)
+            get_response = await self.client.get(
+                config_url, headers=headers, timeout=10.0
+            )
+            get_response.raise_for_status()
+            config = get_response.json()
 
-            data = response.json()
-            if isinstance(data, dict):
-                items = data.get("items") or data.get("contactPoints") or []
-            elif isinstance(data, list):
-                items = data
-            else:
-                items = []
+            am_config = config.get("alertmanager_config", {})
+            receivers = am_config.get("receivers", [])
 
             default_email_names = {"grafana-default-email", "email receiver"}
-            target = next(
-                (
-                    item
-                    for item in items
-                    if str(item.get("name", "")).lower() in default_email_names
-                ),
-                None,
-            )
+            removed_names = {
+                r["name"]
+                for r in receivers
+                if r.get("name", "").lower() in default_email_names
+            }
 
-            if not target:
+            if not removed_names:
                 logger.info(
                     "grafana_default_email_contact_point_not_found", org_id=org_id
                 )
                 return
 
-            uid = target.get("uid") or target.get("id")
-            if not uid:
-                logger.info(
-                    "grafana_default_email_contact_point_no_uid",
-                    org_id=org_id,
-                    name=target.get("name"),
-                )
-                return
+            am_config["receivers"] = [
+                r for r in receivers if r.get("name", "").lower() not in default_email_names
+            ]
 
-            delete_response = await self.client.delete(
-                f"{url}/{uid}", headers=headers, timeout=10.0
+            routes = am_config.get("route", {}).get("routes")
+            if routes is not None:
+                am_config["route"]["routes"] = [
+                    r for r in routes if r.get("receiver") not in removed_names
+                ]
+
+            config["alertmanager_config"] = am_config
+            post_response = await self.client.post(
+                config_url, headers=headers, json=config, timeout=10.0
             )
-            if delete_response.status_code == 409:
-                logger.warning(
-                    "grafana_default_email_contact_point_in_use",
-                    org_id=org_id,
-                    uid=uid,
-                )
-                return
-            delete_response.raise_for_status()
+            post_response.raise_for_status()
             logger.info(
-                "grafana_default_email_contact_point_deleted", org_id=org_id, uid=uid
+                "grafana_default_email_contact_point_deleted",
+                org_id=org_id,
+                removed=list(removed_names),
+            )
+        except Exception as exc:
+            logger.warning(
+                "grafana_delete_default_email_contact_point_failed",
+                org_id=org_id,
+                error=str(exc),
             )
         finally:
             try:
