@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.api.v1.router import api_router
 from app.api.v1.endpoints.internal import router as internal_router
+from app.routers.webhooks import router as webhooks_router
 from app.services.clients.grafana_client import GrafanaService
 from app.services.clients.glitchtip_client import GlitchTipService
 
@@ -83,6 +84,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 app.include_router(api_router, prefix="/api")
 app.include_router(internal_router, prefix="/internal")
+app.include_router(webhooks_router)
 
 
 if __name__ == "__main__":
