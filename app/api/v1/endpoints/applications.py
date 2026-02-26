@@ -1,5 +1,6 @@
 import uuid
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,8 +20,11 @@ from app.schemas.application import (
     InviteUsersResponse,
 )
 from app.models.user import User
+from app.services.alert_setup import setup_glitchtip_project_alert
 from app.services.clients.glitchtip_client import GlitchTipService
 from app.services.clients.grafana_client import GrafanaService
+
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -67,6 +71,19 @@ async def create_application(
     app.glitchtip_dsn = dsn
     await db.commit()
     await db.refresh(app)
+
+    # Setup GlitchTip alert webhook (non-critical, errors are caught inside)
+    if app.glitchtip_project_slug:
+        if not org.glitchtip_slug:
+            logger.warning("glitchtip_alert_skipped_no_org_slug", app_id=str(app.id))
+        else:
+            webhook_url = f"{settings.public_base_url}/webhook/{app.glitchtip_project_slug}"
+            await setup_glitchtip_project_alert(
+                glitchtip_service=glitchtip,
+                organization_slug=org.glitchtip_slug,
+                project_slug=app.glitchtip_project_slug,
+                webhook_url=webhook_url,
+            )
 
     otlp_endpoint = f"https://{settings.alloy_domain}"
 

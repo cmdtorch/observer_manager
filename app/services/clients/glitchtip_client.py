@@ -170,6 +170,53 @@ class GlitchTipService:
         if response.status_code not in (200, 204, 404):
             response.raise_for_status()
 
+    # ── Alerts ───────────────────────────────────────────────────────────────
+
+    async def list_project_alerts(
+        self,
+        organization_slug: str,
+        project_slug: str,
+    ) -> list[dict]:
+        """GET /api/0/projects/{org_slug}/{project_slug}/alerts/"""
+        response = await self._request(
+            "GET",
+            f"/api/0/projects/{organization_slug}/{project_slug}/alerts/",
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    async def create_project_alert(
+        self,
+        organization_slug: str,
+        project_slug: str,
+        recipients: list[dict],
+    ) -> dict:
+        """POST /api/0/projects/{org_slug}/{project_slug}/alerts/"""
+        response = await self._request(
+            "POST",
+            f"/api/0/projects/{organization_slug}/{project_slug}/alerts/",
+            json={"alertRecipients": recipients},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def update_project_alert(
+        self,
+        organization_slug: str,
+        project_slug: str,
+        alert_id: int,
+        recipients: list[dict],
+    ) -> dict:
+        """PUT /api/0/projects/{org_slug}/{project_slug}/alerts/{alert_id}/"""
+        response = await self._request(
+            "PUT",
+            f"/api/0/projects/{organization_slug}/{project_slug}/alerts/{alert_id}/",
+            json={"alertRecipients": recipients},
+        )
+        response.raise_for_status()
+        return response.json()
+
     # Backward-compat aliases
     async def list_members(self, org_slug: str) -> list[dict]:
         return await self.get_org_members(org_slug)

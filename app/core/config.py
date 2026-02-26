@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Email domain restriction
     allowed_email_domain: str = "example.com"
 
+    # Internal service URL (used to construct webhook URLs sent to GlitchTip)
+    public_base_url: str = "http://observer_manager:8080"
+
     # CORS
     cors_allow_origins: str = "*"
     cors_allow_methods: str = "*"
