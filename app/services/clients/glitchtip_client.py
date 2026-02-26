@@ -212,7 +212,12 @@ class GlitchTipService:
         response = await self._request(
             "PUT",
             f"/api/0/projects/{organization_slug}/{project_slug}/alerts/{alert_id}/",
-            json={"alertRecipients": recipients, "quantity": 1, "timespanMinutes": 1},
+            json={
+                "name": "Telegram alerts",
+                "alertRecipients": recipients,
+                "quantity": 1,
+                "timespanMinutes": 1
+            },
         )
         response.raise_for_status()
         return response.json()
