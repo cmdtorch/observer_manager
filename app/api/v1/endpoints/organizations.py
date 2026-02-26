@@ -62,7 +62,6 @@ async def list_organizations(
 ):
     query = (
         select(Organization)
-        .where(Organization.is_active == True)  # noqa: E712
         .options(selectinload(Organization.telegram_group))
         .order_by(Organization.created_at)
     )
