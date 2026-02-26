@@ -172,6 +172,13 @@ class OrganizationService:
             except Exception as exc:
                 log.warning("org_create_alert_rules_failed_non_fatal", error=str(exc))
 
+            # Step 7c — Remove default email contact point (non-fatal)
+            log.info("org_create_step7c_delete_default_email_cp")
+            try:
+                await self.grafana.delete_default_email_contact_point(grafana_org_id)
+            except Exception as exc:
+                log.warning("org_create_delete_default_email_cp_failed_non_fatal", error=str(exc))
+
             # Step 8 — GlitchTip org
             log.info("org_create_step8_glitchtip_org")
             glitchtip_org_id, glitchtip_slug = await self.glitchtip.create_org(request.name)
