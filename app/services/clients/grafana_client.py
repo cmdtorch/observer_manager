@@ -542,6 +542,7 @@ class GrafanaService:
     async def make_empty_default_email_contact_point(self, org_id: int) -> None:
         """Clear integrations on the grafana-default-email receiver via the Kubernetes-style notifications API."""
         _RECEIVER_NAME = "Z3JhZmFuYS1kZWZhdWx0LWVtYWls"
+        _RESOURCE_NAME = "a82b34036bdabbc4"
         receiver_url = (
             f"{self.base_url}/apis/notifications.alerting.grafana.app/v0alpha1"
             f"/namespaces/org-{org_id}/receivers/{_RECEIVER_NAME}"
@@ -560,7 +561,10 @@ class GrafanaService:
                     receiver_url,
                     headers=headers,
                     json={
-                        "metadata": {"name": _RECEIVER_NAME},
+                        "metadata": {
+                            "name": _RECEIVER_NAME,
+                            "resourceVersion": _RESOURCE_NAME,
+                        },
                         "spec": {
                             "title": "grafana-default-email",
                             "integrations": [],
