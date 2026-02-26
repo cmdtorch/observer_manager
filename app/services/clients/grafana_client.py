@@ -546,13 +546,24 @@ class GrafanaService:
             f"{self.base_url}/apis/notifications.alerting.grafana.app/v0alpha1"
             f"/namespaces/org-{org_id}/receivers/{_RECEIVER_NAME}"
         )
-
         sa_token, sa_id = await self._create_temp_service_account_token(org_id)
         try:
             headers = {
                 "Authorization": f"Bearer {sa_token}",
                 "Content-Type": "application/json",
             }
+
+            # Wait for the receiver to be ready
+            deadline = time.monotonic() + 90
+            while True:
+                probe = await self.client.get(receiver_url, headers=headers, timeout=10.0)
+                if probe.status_code == 200:
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Receiver not ready after 90s (last status: {probe.status_code})"
+                    )
+                await asyncio.sleep(15)
 
             response = await self.client.request(
                 "PUT",
