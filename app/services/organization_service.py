@@ -25,7 +25,6 @@ from app.schemas.user import UserRead
 from app.services.clients.glitchtip_client import GlitchTipService
 from app.services.clients.grafana_client import GrafanaService
 from app.services.key_generator import generate_api_key
-from app.services.nginx_manager import NginxManager
 from app.services.rollback_manager import RollbackManager
 
 logger = structlog.get_logger()
@@ -50,13 +49,11 @@ class OrganizationService:
         db: AsyncSession,
         grafana: GrafanaService,
         glitchtip: GlitchTipService,
-        nginx: NginxManager,
         settings: Settings,
     ):
         self.db = db
         self.grafana = grafana
         self.glitchtip = glitchtip
-        self.nginx = nginx
         self.settings = settings
 
     async def create_organization(
@@ -250,13 +247,6 @@ class OrganizationService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Organization creation failed: {exc}",
             )
-
-        # Step 13 — Nginx (non-fatal, org already committed)
-        log.info("org_create_step13_nginx")
-        try:
-            await self.nginx.update_and_reload(self.db)
-        except Exception as exc:
-            log.error("org_create_nginx_failed_non_fatal", error=str(exc))
 
         grafana_url = f"https://{self.settings.grafana_domain}/?orgId={grafana_org_id}"
         glitchtip_url = f"https://{self.settings.glitchtip_domain}/{glitchtip_slug}/issues"
@@ -483,32 +473,26 @@ class OrganizationService:
         for key in keys_result.scalars().all():
             await self.db.delete(key)
 
-        # Step 3 — Nginx
-        log.info("org_delete_step3_nginx")
         await self.db.flush()
-        try:
-            await self.nginx.update_and_reload(self.db)
-        except Exception as exc:
-            log.error("org_delete_nginx_failed", error=str(exc))
 
-        # Step 4 — Delete Grafana org
+        # Step 3 — Delete Grafana org
         if org.grafana_org_id:
-            log.info("org_delete_step4_grafana")
+            log.info("org_delete_step3_grafana")
             try:
                 await self.grafana.delete_org(org.grafana_org_id)
             except Exception as exc:
                 log.error("org_delete_grafana_failed", error=str(exc))
 
-        # Step 5 — Delete GlitchTip org
+        # Step 4 — Delete GlitchTip org
         if org.glitchtip_slug:
-            log.info("org_delete_step5_glitchtip")
+            log.info("org_delete_step4_glitchtip")
             try:
                 await self.glitchtip.delete_org(org.glitchtip_slug)
             except Exception as exc:
                 log.error("org_delete_glitchtip_failed", error=str(exc))
 
-        # Step 6 — Hard delete (clear FKs pointing to this org, then delete children, then org)
-        log.info("org_delete_step6_hard_delete")
+        # Step 5 — Hard delete (clear FKs pointing to this org, then delete children, then org)
+        log.info("org_delete_step5_hard_delete")
 
         # NULL out legacy TelegramGroup.org_id references (nullable FK)
         tg_result = await self.db.execute(

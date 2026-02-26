@@ -10,9 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.api.v1.router import api_router
+from app.api.v1.endpoints.internal import router as internal_router
 from app.services.clients.grafana_client import GrafanaService
 from app.services.clients.glitchtip_client import GlitchTipService
-from app.services.nginx_manager import NginxManager
 
 # Configure structlog
 structlog.configure(
@@ -34,7 +34,6 @@ async def lifespan(app: FastAPI):
 
     app.state.grafana_client = GrafanaService(settings, http_client)
     app.state.glitchtip_client = GlitchTipService(settings, http_client)
-    app.state.nginx_manager = NginxManager(settings)
 
     if settings.telegram_bot_token and settings.telegram_webhook_url:
         try:
@@ -83,6 +82,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(api_router, prefix="/api")
+app.include_router(internal_router, prefix="/internal")
 
 
 if __name__ == "__main__":

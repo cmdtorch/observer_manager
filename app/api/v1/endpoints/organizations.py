@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_glitchtip_client, get_grafana_client, get_nginx_manager
+from app.api.deps import get_glitchtip_client, get_grafana_client
 from app.core.config import get_settings
 from app.core.security import verify_credentials
 from app.db.session import get_db
@@ -28,7 +28,6 @@ from app.schemas.telegram_group import TelegramGroupRead
 from app.schemas.user import UserRead
 from app.services.clients.glitchtip_client import GlitchTipService
 from app.services.clients.grafana_client import GrafanaService
-from app.services.nginx_manager import NginxManager
 from app.services.key_generator import mask_api_key
 from app.services.organization_service import OrganizationService
 from app.services.user_service import fetch_org_users
@@ -46,11 +45,10 @@ async def create_organization(
     db: AsyncSession = Depends(get_db),
     grafana: GrafanaService = Depends(get_grafana_client),
     glitchtip: GlitchTipService = Depends(get_glitchtip_client),
-    nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
     settings = get_settings()
-    service = OrganizationService(db, grafana, glitchtip, nginx, settings)
+    service = OrganizationService(db, grafana, glitchtip, settings)
     return await service.create_organization(request)
 
 
@@ -178,11 +176,10 @@ async def sync_organization(
     db: AsyncSession = Depends(get_db),
     grafana: GrafanaService = Depends(get_grafana_client),
     glitchtip: GlitchTipService = Depends(get_glitchtip_client),
-    nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
     settings = get_settings()
-    service = OrganizationService(db, grafana, glitchtip, nginx, settings)
+    service = OrganizationService(db, grafana, glitchtip, settings)
     try:
         return await service.sync_organization(org_id)
     except httpx.HTTPStatusError:
@@ -202,11 +199,10 @@ async def setup_telegram(
     db: AsyncSession = Depends(get_db),
     grafana: GrafanaService = Depends(get_grafana_client),
     glitchtip: GlitchTipService = Depends(get_glitchtip_client),
-    nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
     settings = get_settings()
-    service = OrganizationService(db, grafana, glitchtip, nginx, settings)
+    service = OrganizationService(db, grafana, glitchtip, settings)
     return await service.setup_telegram(org_id, request.telegram_group_id)
 
 
@@ -216,11 +212,10 @@ async def delete_organization(
     db: AsyncSession = Depends(get_db),
     grafana: GrafanaService = Depends(get_grafana_client),
     glitchtip: GlitchTipService = Depends(get_glitchtip_client),
-    nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
     settings = get_settings()
-    service = OrganizationService(db, grafana, glitchtip, nginx, settings)
+    service = OrganizationService(db, grafana, glitchtip, settings)
     result = await service.delete_organization(org_id)
     return DeleteOrganizationResponse(**result)
 
@@ -231,11 +226,10 @@ async def create_default_alerts(
     db: AsyncSession = Depends(get_db),
     grafana: GrafanaService = Depends(get_grafana_client),
     glitchtip: GlitchTipService = Depends(get_glitchtip_client),
-    nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
     settings = get_settings()
-    service = OrganizationService(db, grafana, glitchtip, nginx, settings)
+    service = OrganizationService(db, grafana, glitchtip, settings)
 
     res = await db.execute(select(Organization).where(Organization.id == org_id))
     org = res.scalar_one_or_none()

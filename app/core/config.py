@@ -24,10 +24,6 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_url: str = ""
 
-    # Nginx
-    nginx_map_path: str = "/shared/nginx/api_keys.map"
-    nginx_container_name: str = "lgtm-nginx-1"
-
     # Domains (for response URLs)
     grafana_domain: str = "grafana.example.com"
     glitchtip_domain: str = "glitchtip.example.com"

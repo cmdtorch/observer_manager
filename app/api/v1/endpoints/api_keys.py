@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_nginx_manager
 from app.core.security import verify_credentials
 from app.db.session import get_db
 from app.models.api_key import ApiKey
@@ -16,7 +15,6 @@ from app.schemas.api_key import (
     DeleteApiKeyResponse,
 )
 from app.services.key_generator import generate_api_key, mask_api_key
-from app.services.nginx_manager import NginxManager
 
 router = APIRouter()
 
@@ -30,7 +28,6 @@ async def create_api_key(
     org_id: uuid.UUID,
     request: CreateApiKeyRequest,
     db: AsyncSession = Depends(get_db),
-    nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
     result = await db.execute(
@@ -49,8 +46,6 @@ async def create_api_key(
     db.add(api_key)
     await db.commit()
     await db.refresh(api_key)
-
-    await nginx.update_and_reload(db)
 
     return CreateApiKeyResponse(
         id=api_key.id,
@@ -95,7 +90,6 @@ async def list_api_keys(
 async def delete_api_key(
     key_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    nginx: NginxManager = Depends(get_nginx_manager),
     _: str = Depends(verify_credentials),
 ):
     result = await db.execute(select(ApiKey).where(ApiKey.id == key_id))
@@ -105,7 +99,5 @@ async def delete_api_key(
 
     key.is_active = False
     await db.commit()
-
-    await nginx.update_and_reload(db)
 
     return DeleteApiKeyResponse(message="API key revoked", key_id=key_id)
