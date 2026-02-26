@@ -1,6 +1,8 @@
+import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -10,8 +12,8 @@ class InvitedUser(Base):
     __tablename__ = "invited_users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    organization_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("organizations.id"), nullable=False
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
     )
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     grafana_invited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

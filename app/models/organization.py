@@ -55,3 +55,6 @@ class Organization(Base):
         back_populates="organization",
         lazy="select",
     )
+    invited_users: Mapped[list["InvitedUser"]] = relationship(  # noqa: F821
+        "InvitedUser", back_populates="organization", lazy="select"
+    )
