@@ -165,19 +165,21 @@ class OrganizationService:
                 except Exception as exc:
                     log.warning("org_create_telegram_failed_non_fatal", error=str(exc))
 
-            # Step 7b — Alert rules (non-fatal)
+            # Step 7b — Remove default email contact point; fall back to emptying it (non-fatal)
+            log.info("org_create_step7b_delete_default_email_cp")
+            try:
+                deleted = await self.grafana.delete_default_email_contact_point(grafana_org_id)
+                if not deleted:
+                    await self.grafana.make_empty_default_email_contact_point(grafana_org_id)
+            except Exception as exc:
+                log.warning("org_create_default_email_cp_failed_non_fatal", error=str(exc))
+
+            # Step 7d — Alert rules (non-fatal)
             log.info("org_create_step7b_alert_rules")
             try:
                 await self.grafana.create_default_alert_rules(grafana_org_id, folder_uid, "mimir")
             except Exception as exc:
                 log.warning("org_create_alert_rules_failed_non_fatal", error=str(exc))
-
-            # Step 7c — Remove default email contact point (non-fatal)
-            log.info("org_create_step7c_delete_default_email_cp")
-            try:
-                await self.grafana.delete_default_email_contact_point(grafana_org_id)
-            except Exception as exc:
-                log.warning("org_create_delete_default_email_cp_failed_non_fatal", error=str(exc))
 
             # Step 8 — GlitchTip org
             log.info("org_create_step8_glitchtip_org")

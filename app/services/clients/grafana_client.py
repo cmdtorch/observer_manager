@@ -539,57 +539,80 @@ class GrafanaService:
             except Exception as exc:
                 logger.warning("grafana_delete_service_account_failed", error=str(exc))
 
-    async def delete_default_email_contact_point(self, org_id: int) -> None:
-        """Remove the default email receiver from Alertmanager config via the config API."""
+    async def make_empty_default_email_contact_point(self, org_id: int) -> None:
+        """Clear integrations on the grafana-default-email receiver via the Kubernetes-style notifications API."""
+        _RECEIVER_NAME = "Z3JhZmFuYS1kZWZhdWx0LWVtYWls"
+        receiver_url = (
+            f"{self.base_url}/apis/notifications.alerting.grafana.app/v0alpha1"
+            f"/namespaces/org-{org_id}/receivers/{_RECEIVER_NAME}"
+        )
+
         sa_token, sa_id = await self._create_temp_service_account_token(org_id)
         try:
-            config_url = f"{self.base_url}/api/alertmanager/grafana/config/api/v1/alertmanager"
             headers = {
                 "Authorization": f"Bearer {sa_token}",
                 "Content-Type": "application/json",
             }
 
-            get_response = await self.client.get(
-                config_url, headers=headers, timeout=10.0
+            response = await self.client.request(
+                "PUT",
+                receiver_url,
+                headers=headers,
+                json={
+                    "metadata": {"name": _RECEIVER_NAME},
+                    "spec": {
+                        "title": "grafana-default-email",
+                        "integrations": [],
+                    },
+                },
+                timeout=10.0,
             )
-            get_response.raise_for_status()
-            config = get_response.json()
+            response.raise_for_status()
+            logger.info("grafana_default_email_contact_point_emptied", org_id=org_id)
+        except Exception as exc:
+            logger.warning(
+                "grafana_empty_default_email_contact_point_failed",
+                org_id=org_id,
+                error=str(exc),
+            )
+        finally:
+            try:
+                await self._delete_service_account(org_id, sa_id)
+            except Exception as exc:
+                logger.warning("grafana_delete_service_account_failed", error=str(exc))
 
-            am_config = config.get("alertmanager_config", {})
-            receivers = am_config.get("receivers", [])
+    async def delete_default_email_contact_point(self, org_id: int) -> None:
+        """Remove the grafana-default-email receiver via the Kubernetes-style notifications API."""
+        _RECEIVER_NAME = "Z3JhZmFuYS1kZWZhdWx0LWVtYWls"
+        receiver_url = (
+            f"{self.base_url}/apis/notifications.alerting.grafana.app/v0alpha1"
+            f"/namespaces/org-{org_id}/receivers/{_RECEIVER_NAME}"
+        )
 
-            default_email_names = {"grafana-default-email", "email receiver"}
-            removed_names = {
-                r["name"]
-                for r in receivers
-                if r.get("name", "").lower() in default_email_names
+        sa_token, sa_id = await self._create_temp_service_account_token(org_id)
+        try:
+            headers = {
+                "Authorization": f"Bearer {sa_token}",
+                "Content-Type": "application/json",
             }
 
-            if not removed_names:
+            delete_response = await self.client.request(
+                "DELETE", receiver_url, headers=headers, timeout=10.0
+            )
+            if delete_response.status_code == 404:
                 logger.info(
                     "grafana_default_email_contact_point_not_found", org_id=org_id
                 )
                 return
-
-            am_config["receivers"] = [
-                r for r in receivers if r.get("name", "").lower() not in default_email_names
-            ]
-
-            routes = am_config.get("route", {}).get("routes")
-            if routes is not None:
-                am_config["route"]["routes"] = [
-                    r for r in routes if r.get("receiver") not in removed_names
-                ]
-
-            config["alertmanager_config"] = am_config
-            post_response = await self.client.post(
-                config_url, headers=headers, json=config, timeout=10.0
-            )
-            post_response.raise_for_status()
+            if delete_response.status_code == 409:
+                logger.info(
+                    "grafana_default_email_contact_point_last_route",
+                )
+                return
+            delete_response.raise_for_status()
             logger.info(
                 "grafana_default_email_contact_point_deleted",
                 org_id=org_id,
-                removed=list(removed_names),
             )
         except Exception as exc:
             logger.warning(
@@ -612,7 +635,7 @@ class GrafanaService:
         default email contact point which is no longer needed.
         """
         await self.upsert_telegram_contact_point(org_id, bot_token, chat_id)
-        await self.delete_default_email_contact_point(org_id)
+        await self.make_empty_default_email_contact_point(org_id)
 
     async def create_alert_rule(self, org_id: int, folder_uid: str, rule_config: dict) -> None:
         """Create a single alert rule via provisioning API."""
