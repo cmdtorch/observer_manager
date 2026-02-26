@@ -553,33 +553,29 @@ class GrafanaService:
                 "Content-Type": "application/json",
             }
 
-            # Wait for the receiver to be ready
             deadline = time.monotonic() + 90
             while True:
-                probe = await self.client.get(receiver_url, headers=headers, timeout=10.0)
-                if probe.status_code == 200:
+                response = await self.client.request(
+                    "PUT",
+                    receiver_url,
+                    headers=headers,
+                    json={
+                        "metadata": {"name": _RECEIVER_NAME},
+                        "spec": {
+                            "title": "grafana-default-email",
+                            "integrations": [],
+                        },
+                    },
+                    timeout=10.0,
+                )
+                if response.status_code == 200:
+                    logger.info("grafana_default_email_contact_point_emptied", org_id=org_id)
                     break
                 if time.monotonic() >= deadline:
                     raise TimeoutError(
-                        f"Receiver not ready after 90s (last status: {probe.status_code})"
+                        f"Receiver not ready after 90s (last status: {response.status_code})"
                     )
                 await asyncio.sleep(15)
-
-            response = await self.client.request(
-                "PUT",
-                receiver_url,
-                headers=headers,
-                json={
-                    "metadata": {"name": _RECEIVER_NAME},
-                    "spec": {
-                        "title": "grafana-default-email",
-                        "integrations": [],
-                    },
-                },
-                timeout=10.0,
-            )
-            response.raise_for_status()
-            logger.info("grafana_default_email_contact_point_emptied", org_id=org_id)
         except Exception as exc:
             logger.warning(
                 "grafana_empty_default_email_contact_point_failed",
