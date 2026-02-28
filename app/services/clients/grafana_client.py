@@ -99,7 +99,7 @@ class GrafanaService:
         return None
 
     async def add_existing_user_to_org(
-        self, login_or_email: str, grafana_org_id: int, role: str = "Editor"
+        self, login_or_email: str, grafana_org_id: int, role: str = "Viewer"
     ) -> None:
         """POST /api/orgs/{grafana_org_id}/users — add existing Grafana user to org"""
         response = await self._request(
@@ -111,7 +111,7 @@ class GrafanaService:
             response.raise_for_status()
 
     async def invite_user(
-        self, org_id: int, email: str, role: str = "Editor"
+        self, org_id: int, email: str, role: str = "Viewer"
     ) -> tuple[bool, str | None]:
         """POST /api/org/invites — returns (success, invite_url)"""
         response = await self._request(
